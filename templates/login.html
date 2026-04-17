@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}Login — LIMS{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h1>Entrar</h1>
+
+    <div id="alert" class="alert" style="display:none;"></div>
+
+    <form id="login-form">
+        {% csrf_token %}
+        <div class="form-group">
+            <label for="username">Usuário</label>
+            <input type="text" id="username" name="username" autocomplete="username" required>
+        </div>
+        <div class="form-group">
+            <label for="password">Senha</label>
+            <input type="password" id="password" name="password" autocomplete="current-password" required>
+        </div>
+        <button type="submit" id="submit-btn">Entrar</button>
+    </form>
+
+    <p class="text-muted text-center">
+        Não tem conta? <a href="{% url 'frontend-register' %}">Registrar</a>
+    </p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const form = document.getElementById('login-form');
+    const alertBox = document.getElementById('alert');
+    const submitBtn = document.getElementById('submit-btn');
+
+    function showAlert(msg, type = 'error') {
+        alertBox.textContent = msg;
+        alertBox.className = 'alert alert-' + type;
+        alertBox.style.display = 'block';
+    }
+
+    function getCsrf() {
+        return document.querySelector('[name=csrfmiddlewaretoken]').value;
+    }
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Entrando…';
+        alertBox.style.display = 'none';
+
+        const body = {
+            username: document.getElementById('username').value.trim(),
+            password: document.getElementById('password').value,
+        };
+
+        try {
+            const res = await fetch('/api/users/login/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCsrf(),
+                },
+                body: JSON.stringify(body),
+            });
+
+            if (res.status === 429) {
+                showAlert('Muitas tentativas. Aguarde um momento e tente novamente.');
+                return;
+            }
+
+            const data = await res.json();
+
+            if (!res.ok) {
+                showAlert(data.detail || data.non_field_errors?.[0] || 'Credenciais inválidas.');
+                return;
+            }
+
+            if (data.two_factor_required || data['2fa_required']) {
+                sessionStorage.setItem('2fa_username', body.username);
+                window.location.href = "{% url 'frontend-verify-2fa' %}";
+                return;
+            }
+
+            if (data.access) {
+                sessionStorage.setItem('access_token', data.access);
+                sessionStorage.setItem('refresh_token', data.refresh);
+                window.location.href = "{% url 'frontend-dashboard' %}";
+            }
+        } catch {
+            showAlert('Erro de conexão. Tente novamente.');
+        } finally {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Entrar';
+        }
+    });
+</script>
+{% endblock %}
