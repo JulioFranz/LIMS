@@ -33,3 +33,4 @@ Rode as migrations e inicie o servidor:
 python manage.py migrate
 python manage.py runserver
 ```
+
