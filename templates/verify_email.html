@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block title %}Verificar E-mail — LIMS{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h1>Verificar e-mail</h1>
+    <p style="color:#6b7280; font-size:.9rem; margin-bottom:1.25rem;">
+        Insira o código de verificação enviado para seu e-mail.
+    </p>
+
+    <div id="alert" class="alert" style="display:none;"></div>
+
+    <form id="verify-email-form">
+        {% csrf_token %}
+        <div class="form-group">
+            <label for="token">Código de verificação</label>
+            <input type="text" id="token" name="token" inputmode="numeric"
+                   autocomplete="one-time-code" placeholder="Cole o código aqui" required>
+        </div>
+        <button type="submit" id="submit-btn">Verificar e-mail</button>
+    </form>
+
+    <p class="text-muted text-center">
+        <a href="{% url 'frontend-login' %}">Ir para o login</a>
+    </p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const form = document.getElementById('verify-email-form');
+    const alertBox = document.getElementById('alert');
+    const submitBtn = document.getElementById('submit-btn');
+
+    function showAlert(msg, type = 'error') {
+        alertBox.textContent = msg;
+        alertBox.className = 'alert alert-' + type;
+        alertBox.style.display = 'block';
+    }
+
+    function getCsrf() {
+        return document.querySelector('[name=csrfmiddlewaretoken]').value;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('token')) {
+        document.getElementById('token').value = params.get('token');
+    }
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Verificando…';
+        alertBox.style.display = 'none';
+
+        const body = { token: document.getElementById('token').value.trim() };
+
+        try {
+            const res = await fetch('/api/users/verify-email/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCsrf(),
+                },
+                body: JSON.stringify(body),
+            });
+
+            const data = await res.json();
+
+            if (!res.ok) {
+                showAlert(data.detail || 'Token inválido ou expirado.');
+                return;
+            }
+
+            showAlert('E-mail verificado com sucesso! Você já pode fazer login.', 'success');
+            submitBtn.style.display = 'none';
+            setTimeout(() => { window.location.href = "{% url 'frontend-login' %}"; }, 2000);
+        } catch {
+            showAlert('Erro de conexão. Tente novamente.');
+        } finally {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Verificar e-mail';
+        }
+    });
+</script>
+{% endblock %}
