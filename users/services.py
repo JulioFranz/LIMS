@@ -47,6 +47,36 @@ def _hash_email(email: str) -> str:
     return hashlib.sha256(email.strip().lower().encode()).hexdigest()[:16]
 
 
+def _audit(event: str, result: str, *, user=None, email_hash: str = "",
+           client_ip: str = "", user_agent: str = "") -> None:
+    """Grava evento de auditoria no banco e no arquivo de log."""
+    from .models import AuditLog
+
+    try:
+        AuditLog.objects.create(
+            event=event,
+            result=result,
+            user=user,
+            email_hash=email_hash,
+            ip=client_ip or None,
+            user_agent=user_agent[:200],
+        )
+    except Exception:
+        logger.exception("Falha ao gravar AuditLog")
+
+    audit_logger.info(
+        f"{event}.{result}",
+        extra={
+            "event": event,
+            "result": result,
+            "user_id": user.id if user else "",
+            "email_hash": email_hash,
+            "ip": client_ip,
+            "user_agent": user_agent[:200],
+        },
+    )
+
+
 def _hash_secret(secret: str) -> str:
     """SHA-256 hex do segredo do token de reset (Requisito 2.2)."""
     return hashlib.sha256(secret.encode()).hexdigest()
@@ -103,6 +133,8 @@ def validate_2fa_and_get_jwt(token_str: str) -> dict:
     }
 
 
+# ---------- Recuperação de senha ----------
+
 def _build_reset_url(request, token_id: str, secret: str) -> str:
     """Monta a URL absoluta que vai no e-mail."""
     path = reverse('frontend-password-reset-confirm')
@@ -118,16 +150,12 @@ def request_password_reset(email: str, request, *, client_ip: str = "", user_age
     try:
         user = User.objects.get(email__iexact=email.strip())
     except User.DoesNotExist:
-        # tentativa sem user
-        audit_logger.info(
-            "password_reset.request",
-            extra={
-                "event": "password_reset_requested",
-                "result": "no_user",
-                "email_hash": email_hash,
-                "ip": client_ip,
-                "user_agent": user_agent[:200],
-            },
+        _audit(
+            event="password_reset_requested",
+            result="no_user",
+            email_hash=email_hash,
+            client_ip=client_ip,
+            user_agent=user_agent,
         )
         return
 
@@ -167,29 +195,23 @@ def request_password_reset(email: str, request, *, client_ip: str = "", user_age
             f"Falha ao enviar e-mail de reset para user_id={user.id}",
             exc_info=True,
         )
-        audit_logger.info(
-            "password_reset.request",
-            extra={
-                "event": "password_reset_requested",
-                "result": "email_send_failed",
-                "user_id": user.id,
-                "email_hash": email_hash,
-                "ip": client_ip,
-                "user_agent": user_agent[:200],
-            },
+        _audit(
+            event="password_reset_requested",
+            result="email_send_failed",
+            user=user,
+            email_hash=email_hash,
+            client_ip=client_ip,
+            user_agent=user_agent,
         )
         return
 
-    audit_logger.info(
-        "password_reset.request",
-        extra={
-            "event": "password_reset_requested",
-            "result": "email_sent",
-            "user_id": user.id,
-            "email_hash": email_hash,
-            "ip": client_ip,
-            "user_agent": user_agent[:200],
-        },
+    _audit(
+        event="password_reset_requested",
+        result="email_sent",
+        user=user,
+        email_hash=email_hash,
+        client_ip=client_ip,
+        user_agent=user_agent,
     )
 
 
@@ -212,57 +234,45 @@ def confirm_password_reset(
             .get(token=token_id, change_type='password_reset')
         )
     except (ProfileChangeToken.DoesNotExist, DjangoValidationError):
-        audit_logger.warning(
-            "password_reset.confirm",
-            extra={
-                "event": "password_reset_confirmed",
-                "result": "token_not_found",
-                "ip": client_ip,
-                "user_agent": user_agent[:200],
-            },
+        _audit(
+            event="password_reset_confirmed",
+            result="token_not_found",
+            client_ip=client_ip,
+            user_agent=user_agent,
         )
         raise ValueError("Link inválido ou expirado.")
 
     user = token_obj.user
 
     if token_obj.used_at is not None:
-        audit_logger.warning(
-            "password_reset.confirm",
-            extra={
-                "event": "password_reset_confirmed",
-                "result": "token_already_used",
-                "user_id": user.id,
-                "ip": client_ip,
-                "user_agent": user_agent[:200],
-            },
+        _audit(
+            event="password_reset_confirmed",
+            result="token_already_used",
+            user=user,
+            client_ip=client_ip,
+            user_agent=user_agent,
         )
         raise ValueError("Link inválido ou expirado.")
 
     if token_obj.token_hash != secret_hash:
-        audit_logger.warning(
-            "password_reset.confirm",
-            extra={
-                "event": "password_reset_confirmed",
-                "result": "invalid_secret",
-                "user_id": user.id,
-                "ip": client_ip,
-                "user_agent": user_agent[:200],
-            },
+        _audit(
+            event="password_reset_confirmed",
+            result="invalid_secret",
+            user=user,
+            client_ip=client_ip,
+            user_agent=user_agent,
         )
         raise ValueError("Link inválido ou expirado.")
 
-    # expiracao
+    # expiração
     from .selectors import _expiration_for
     if timezone.now() > token_obj.created_at + _expiration_for('password_reset'):
-        audit_logger.warning(
-            "password_reset.confirm",
-            extra={
-                "event": "password_reset_confirmed",
-                "result": "token_expired",
-                "user_id": user.id,
-                "ip": client_ip,
-                "user_agent": user_agent[:200],
-            },
+        _audit(
+            event="password_reset_confirmed",
+            result="token_expired",
+            user=user,
+            client_ip=client_ip,
+            user_agent=user_agent,
         )
         raise ValueError("Link inválido ou expirado.")
 
@@ -270,15 +280,12 @@ def confirm_password_reset(
     try:
         validate_password(new_password, user=user)
     except DjangoValidationError as e:
-        audit_logger.info(
-            "password_reset.confirm",
-            extra={
-                "event": "password_reset_confirmed",
-                "result": "weak_password",
-                "user_id": user.id,
-                "ip": client_ip,
-                "user_agent": user_agent[:200],
-            },
+        _audit(
+            event="password_reset_confirmed",
+            result="weak_password",
+            user=user,
+            client_ip=client_ip,
+            user_agent=user_agent,
         )
         raise ValueError(" ".join(e.messages))
 
@@ -299,13 +306,10 @@ def confirm_password_reset(
             exc_info=True,
         )
 
-    audit_logger.info(
-        "password_reset.confirm",
-        extra={
-            "event": "password_reset_confirmed",
-            "result": "success",
-            "user_id": user.id,
-            "ip": client_ip,
-            "user_agent": user_agent[:200],
-        },
+    _audit(
+        event="password_reset_confirmed",
+        result="success",
+        user=user,
+        client_ip=client_ip,
+        user_agent=user_agent,
     )

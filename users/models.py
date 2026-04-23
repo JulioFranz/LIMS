@@ -35,3 +35,41 @@ class ProfileChangeToken(models.Model):
 
     def __str__(self):
         return f"{self.user.username} — {self.change_type} token"
+
+class AuditLog(models.Model):
+    EVENTS = [
+        ('password_reset_requested', 'Password Reset Requested'),
+        ('password_reset_confirmed', 'Password Reset Confirmed'),
+    ]
+    RESULTS = [
+        ('email_sent', 'Email Sent'),
+        ('no_user', 'No User'),
+        ('email_send_failed', 'Email Send Failed'),
+        ('success', 'Success'),
+        ('token_not_found', 'Token Not Found'),
+        ('token_already_used', 'Token Already Used'),
+        ('invalid_secret', 'Invalid Secret'),
+        ('token_expired', 'Token Expired'),
+        ('weak_password', 'Weak Password'),
+    ]
+
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    event = models.CharField(max_length=64, choices=EVENTS, db_index=True)
+    result = models.CharField(max_length=32, choices=RESULTS)
+    user = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='audit_logs',
+    )
+    email_hash = models.CharField(max_length=32, blank=True, default='')
+    ip = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=200, blank=True, default='')
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['event', 'result']),
+            models.Index(fields=['-created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.created_at:%Y-%m-%d %H:%M:%S} {self.event} {self.result}"
