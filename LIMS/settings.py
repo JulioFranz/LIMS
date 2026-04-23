@@ -19,9 +19,9 @@ PASSWORD_HASHERS = [
     'django.contrib.auth.hashers.PBKDF2PasswordHasher',
 ]
 
-ARGON2_TIME_COST = 3        # iteracoes
+ARGON2_TIME_COST = 3  # iteracoes
 ARGON2_MEMORY_COST = 65536  # 64mb de ram
-ARGON2_PARALLELISM = 4      # threads
+ARGON2_PARALLELISM = 4  # threads
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
@@ -29,6 +29,7 @@ REST_FRAMEWORK = {
     ),
     'DEFAULT_THROTTLE_RATES': {
         'auth': '3/minute',
+        'password_reset': '5/hour'
     }
 }
 
@@ -102,6 +103,49 @@ SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
     'BLACKLIST_AFTER_ROTATION': True,
+}
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'audit': {
+            'format': (
+                '%(asctime)s %(levelname)s %(name)s '
+                'event=%(event)s result=%(result)s '
+                'user_id=%(user_id)s email_hash=%(email_hash)s '
+                'ip=%(ip)s user_agent="%(user_agent)s"'
+            ),
+        },
+        'simple': {
+            'format': '%(asctime)s %(levelname)s %(name)s %(message)s',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
+        },
+        'audit_file': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': str(BASE_DIR / 'logs' / 'audit.log'),
+            'maxBytes': 5 * 1024 * 1024,
+            'backupCount': 10,
+            'formatter': 'audit',
+        },
+    },
+    'loggers': {
+        'users.audit': {
+            'handlers': ['audit_file', 'console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'users': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
 }
 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
