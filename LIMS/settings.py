@@ -23,13 +23,9 @@ if RENDER_HOSTNAME:
     CSRF_TRUSTED_ORIGINS = [f'https://{RENDER_HOSTNAME}']
 
 PASSWORD_HASHERS = [
-    'django.contrib.auth.hashers.Argon2PasswordHasher',
+    'LIMS.hashers.RenderArgon2Hasher',
     'django.contrib.auth.hashers.PBKDF2PasswordHasher',
 ]
-
-ARGON2_TIME_COST = 3  # iteracoes
-ARGON2_MEMORY_COST = 65536  # 64mb de ram
-ARGON2_PARALLELISM = 4  # threads
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (

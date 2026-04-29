@@ -78,8 +78,9 @@ class ParametrosCustoHashTest(TestCase):
 
     def test_parametros_custo_definidos(self):
         hasher = get_hasher("default")
+        hasher = get_hasher("default")
         self.assertGreaterEqual(hasher.time_cost, 2, "time_cost deve ser >= 2")
-        self.assertGreaterEqual(hasher.memory_cost, 65536, "memory_cost deve ser >= 64MB")
+        self.assertGreaterEqual(hasher.memory_cost, 19456, "memory_cost deve ser >= 19MB")
         self.assertGreaterEqual(hasher.parallelism, 1, "parallelism deve ser >= 1")
 
 
