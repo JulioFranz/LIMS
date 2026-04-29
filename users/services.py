@@ -11,6 +11,7 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 import logging
+import threading
 
 from .models import ProfileChangeToken, UserProfile
 from .selectors import get_token_info, get_password_reset_token
@@ -47,12 +48,21 @@ def get_token_new_value(token_obj) -> str:
 
 
 def _send_email(subject: str, message: str, recipient: str) -> None:
-    send_mail(
-        subject=subject,
-        message=message,
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[recipient],
-    )
+
+    def send_task():
+        try:
+            send_mail(
+                subject=subject,
+                message=message,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[recipient],
+                fail_silently=False,
+            )
+            logger.info(f"E-mail enviado com sucesso para {recipient}")
+        except Exception:
+            logger.error(f"Falha ao enviar e-mail para {recipient}", exc_info=True)
+
+    threading.Thread(target=send_task).start()
 
 
 def _hash_email(email: str) -> str:
