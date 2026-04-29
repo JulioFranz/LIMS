@@ -14,6 +14,7 @@ import logging
 
 from .models import ProfileChangeToken, UserProfile
 from .selectors import get_token_info, get_password_reset_token
+from .crypto import encrypt_value, decrypt_value
 
 logger = logging.getLogger(__name__)
 audit_logger = logging.getLogger("users.audit")
@@ -22,15 +23,27 @@ audit_logger = logging.getLogger("users.audit")
 # ---------- Helpers ----------
 
 def _create_token(user: User, change_type: str, new_value: str = "") -> str:
-    token = str(uuid.uuid4())
+    token_id = str(uuid.uuid4())
+    secret = str(uuid.uuid4())
+    secret_hash = _hash_secret(secret)
+
     ProfileChangeToken.objects.filter(user=user, change_type=change_type).delete()
     ProfileChangeToken.objects.create(
         user=user,
-        token=token,
+        token=token_id,
         change_type=change_type,
-        new_value=new_value,
+        new_value=encrypt_value(new_value),
+        token_hash=secret_hash,
     )
-    return token
+    return secret
+
+
+def get_token_new_value(token_obj) -> str:
+    """
+    Decifra o campo new_value de um ProfileChangeToken.
+    Use sempre que precisar ler new_value em outras partes do código.
+    """
+    return decrypt_value(token_obj.new_value)
 
 
 def _send_email(subject: str, message: str, recipient: str) -> None:
@@ -88,10 +101,10 @@ def register_user(username: str, email: str, password: str) -> User:
     UserProfile.objects.create(user=user, is_verified=False)
 
     try:
-        token = _create_token(user, "verify")
+        secret = _create_token(user, "verify")
         _send_email(
             "Verifique sua conta",
-            f"Bem-vindo! Use este token para verificar sua conta: {token}",
+            f"Bem-vindo! Use este token para verificar sua conta: {secret}",
             user.email
         )
     except Exception:
@@ -101,7 +114,23 @@ def register_user(username: str, email: str, password: str) -> User:
 
 
 def confirm_email_verification(token_str: str) -> None:
-    token_obj = get_token_info(token_str, "verify")
+    """Confirma e-mail validando o segredo via hash."""
+    secret_hash = _hash_secret(token_str)
+    from .selectors import _expiration_for
+
+    token_obj = (
+        ProfileChangeToken.objects
+        .select_related("user__profile")
+        .filter(change_type="verify", token_hash=secret_hash)
+        .first()
+    )
+    if token_obj is None:
+        raise ValueError("Token inválido.")
+
+    if timezone.now() > token_obj.created_at + _expiration_for("verify"):
+        token_obj.delete()
+        raise ValueError("Token expirado.")
+
     profile = token_obj.user.profile
     profile.is_verified = True
     profile.save(update_fields=["is_verified"])
@@ -111,18 +140,33 @@ def confirm_email_verification(token_str: str) -> None:
 # ---------- 2FA ----------
 
 def generate_2fa_token(user: User) -> str:
-    token = _create_token(user, "2fa_login")
+    secret = _create_token(user, "2fa_login")
     _send_email(
         subject="Seu código de Autenticação em Duas Etapas (2FA)",
-        message=f"Olá {user.username},\n\nPara concluir seu login, utilize o token abaixo:\n\n{token}\n\nEste token expira em 15 minutos.",
+        message=f"Olá {user.username},\n\nPara concluir seu login, utilize o token abaixo:\n\n{secret}\n\nEste token expira em 15 minutos.",
         recipient=user.email
     )
     logger.info(f"Token 2FA gerado para o usuário {user.username}.")
-    return token
+    return secret
 
 
 def validate_2fa_and_get_jwt(token_str: str) -> dict:
-    token_obj = get_token_info(token_str, "2fa_login")
+    secret_hash = _hash_secret(token_str)
+    from .selectors import _expiration_for
+
+    token_obj = (
+        ProfileChangeToken.objects
+        .select_related("user")
+        .filter(change_type="2fa_login", token_hash=secret_hash)
+        .first()
+    )
+    if token_obj is None:
+        raise ValueError("Token inválido.")
+
+    if timezone.now() > token_obj.created_at + _expiration_for("2fa_login"):
+        token_obj.delete()
+        raise ValueError("Token expirado.")
+
     user = token_obj.user
     refresh = RefreshToken.for_user(user)
     token_obj.delete()
@@ -159,7 +203,7 @@ def request_password_reset(email: str, request, *, client_ip: str = "", user_age
         )
         return
 
-    # segredo criptogradfado
+    # segredo criptograficamente seguro
     secret = secrets.token_urlsafe(64)
     secret_hash = _hash_secret(secret)
 

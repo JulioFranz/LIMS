@@ -1,3 +1,4 @@
+import re
 from django.test import TestCase
 from django.contrib.auth.models import User
 from django.contrib.auth.hashers import check_password, get_hasher
@@ -17,19 +18,34 @@ THROTTLE_MOCK = patch(
     return_value=True,
 )
 
-def login_e_obter_jwt(client, username, password):
-    client.post(reverse("login"), {
-        "username": username,
-        "password": password,
-    })
-    token_obj = ProfileChangeToken.objects.get(
-        user__username=username, change_type="2fa_login"
+
+def _extrair_segredo_do_email(mock_email):
+    """
+    Como o token agora é hasheado no banco, o segredo só existe no e-mail
+    enviado ao usuário. Captura o UUID do parâmetro `message` do _send_email.
+    """
+    call_args = mock_email.call_args
+    message = call_args.kwargs.get("message") or call_args.args[1]
+    match = re.search(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+        message,
     )
+    return match.group(0) if match else None
+
+
+def login_e_obter_jwt(client, username, password):
+    """Faz login completo (login + 2FA) e retorna os JWTs."""
+    with patch("users.services._send_email") as mock_email:
+        client.post(reverse("login"), {
+            "username": username,
+            "password": password,
+        })
+        secret = _extrair_segredo_do_email(mock_email)
+
     response = client.post(reverse("verify-2fa"), {
-        "token": str(token_obj.token),
+        "token": secret,
     })
     return response.data
-
 
 
 # 1.1  Hash
@@ -166,20 +182,19 @@ class Validacao2FATest(TestCase):
     @THROTTLE_MOCK
     @patch("users.services._send_email")
     def test_2fa_valido_retorna_jwt(self, mock_email, mock_throttle):
-        #login
+        # login (envia o segredo por e-mail)
         self.client.post(reverse("login"), {
             "username": "val2fa",
             "password": "SenhaForte123!"
         })
 
-        # verifica o token 2FA do banco
-        token_obj = ProfileChangeToken.objects.get(
-            user=self.user, change_type="2fa_login"
-        )
+        # captura o segredo do e-mail (não está mais em claro no banco)
+        secret = _extrair_segredo_do_email(mock_email)
+        self.assertIsNotNone(secret, "Segredo deve estar no e-mail enviado")
 
-        #  verifica o 2FA
+        # verifica o 2FA
         response = self.client.post(reverse("verify-2fa"), {
-            "token": str(token_obj.token)
+            "token": secret
         })
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn("access", response.data)
@@ -339,3 +354,83 @@ class RegistroUsuarioTest(TestCase):
             "password": "SenhaErrada!"
         })
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+# 3.4 — Cifragem AES de PII em repouso (Seção 3 do checklist)
+class CifragemAESNewValueTest(TestCase):
+    """
+    Requisito 3.4 — Dados sensíveis criptografados em repouso.
+
+    Verifica que o campo new_value de ProfileChangeToken, que armazena
+    PII (novo e-mail solicitado pelo usuário), é cifrado com AES-256-GCM
+    via Fernet antes de ser persistido no banco.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="aestest",
+            email="aes@test.com",
+            password="SenhaForte123!",
+        )
+
+    def test_new_value_armazenado_cifrado(self):
+        """O campo new_value não pode estar em texto claro no banco."""
+        from users.services import _create_token
+
+        novo_email = "novo.endereco@test.com"
+        _create_token(self.user, "email_new", new_value=novo_email)
+
+        token_obj = ProfileChangeToken.objects.get(
+            user=self.user, change_type="email_new"
+        )
+
+        # O valor cifrado NÃO pode conter o e-mail em claro
+        self.assertNotIn(novo_email, token_obj.new_value)
+        self.assertNotIn("novo.endereco", token_obj.new_value)
+
+        # Tokens Fernet começam com "gAAAAA"
+        self.assertTrue(
+            token_obj.new_value.startswith("gAAAAA"),
+            f"Esperado token Fernet, obteve: {token_obj.new_value[:30]}..."
+        )
+
+    def test_new_value_decifravel_com_chave_correta(self):
+        """O valor cifrado deve voltar ao original ao ser decifrado."""
+        from users.services import _create_token, get_token_new_value
+
+        novo_email = "outro@test.com"
+        _create_token(self.user, "email_new", new_value=novo_email)
+
+        token_obj = ProfileChangeToken.objects.get(
+            user=self.user, change_type="email_new"
+        )
+
+        decifrado = get_token_new_value(token_obj)
+        self.assertEqual(decifrado, novo_email)
+
+    def test_cifragem_nao_deterministica(self):
+        """
+        Cifrar o mesmo valor duas vezes deve produzir ciphertexts diferentes
+        (Fernet usa IV aleatório por operação).
+        """
+        from users.crypto import encrypt_value
+
+        valor = "mesmo@email.com"
+        ct1 = encrypt_value(valor)
+        ct2 = encrypt_value(valor)
+
+        self.assertNotEqual(ct1, ct2)
+
+    def test_new_value_vazio_nao_quebra(self):
+        """
+        Tokens sem new_value (verify, 2fa_login, password_reset) devem
+        continuar funcionando normalmente.
+        """
+        from users.services import _create_token
+
+        _create_token(self.user, "2fa_login")  # sem new_value
+
+        token_obj = ProfileChangeToken.objects.get(
+            user=self.user, change_type="2fa_login"
+        )
+        self.assertEqual(token_obj.new_value, "")
