@@ -22,13 +22,7 @@ DEBUG=True
 ALLOWED_HOSTS=127.0.0.1,localhost
 
 FIELD_ENCRYPTION_KEY=gere-com-o-comando-abaixo
-
-EMAIL_HOST=smtp-relay.brevo.com
-EMAIL_PORT=587
-EMAIL_USE_TLS=True
-EMAIL_HOST_USER=seu-usuario-smtp
-EMAIL_HOST_PASSWORD=sua-senha-smtp
-[email protected]
+DEFAULT_FROM_EMAIL=seu-email-do-brevo
 BREVO_API_KEY=sua-api-key-do-brevo
 ```
 
@@ -50,8 +44,3 @@ python manage.py runserver
 ```bash
 python manage.py test users -v 2
 ```
-
-## Autores
-
-Julio Franz Moura  
-Mauro Aparecido Gonçalves de Campos Junior
