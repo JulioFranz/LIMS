@@ -1,6 +1,9 @@
 import hashlib
+import os
 import secrets
 import uuid
+
+import sib_api_v3_sdk
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
@@ -12,6 +15,8 @@ from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 import logging
 import threading
+
+from sib_api_v3_sdk.rest import ApiException
 
 from .models import ProfileChangeToken, UserProfile
 from .selectors import get_token_info, get_password_reset_token
@@ -48,20 +53,26 @@ def get_token_new_value(token_obj) -> str:
 
 
 def _send_email(subject: str, message: str, recipient: str) -> None:
-
     def send_task():
-        try:
-            send_mail(
-                subject=subject,
-                message=message,
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[recipient],
-                fail_silently=False,
-            )
-            logger.info(f"E-mail enviado com sucesso para {recipient}")
-        except Exception:
-            logger.error(f"Falha ao enviar e-mail para {recipient}", exc_info=True)
+        configuration = sib_api_v3_sdk.Configuration()
+        configuration.api_key['api-key'] = os.environ.get('BREVO_API_KEY')
 
+        api_instance = sib_api_v3_sdk.TransactionalEmailsApi(sib_api_v3_sdk.ApiClient(configuration))
+
+        send_smtp_email = sib_api_v3_sdk.SendSmtpEmail(
+            to=[{"email": recipient}],
+            sender={"email": settings.DEFAULT_FROM_EMAIL, "name": "LIMS System"},
+            subject=subject,
+            html_content=f"<html><body><p>{message}</p></body></html>"
+        )
+
+        try:
+            api_instance.send_transac_email(send_smtp_email)
+            logger.info(f"E-mail enviado via API para {recipient}")
+        except ApiException as e:
+            logger.error(f"Erro na API do Brevo ao enviar para {recipient}: {e}")
+
+    # Mantém o processamento em background
     threading.Thread(target=send_task).start()
 
 
