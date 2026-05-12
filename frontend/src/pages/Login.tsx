@@ -1,0 +1,71 @@
+import { useState } from 'react'
+import { useNavigate, Link } from 'react-router-dom'
+import api from '../api/client'
+import Alert from '../components/Alert'
+import Layout from '../components/Layout'
+
+export default function Login() {
+  const navigate = useNavigate()
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [alert, setAlert] = useState({ message: '', type: 'error' as 'error' | 'success' })
+  const [loading, setLoading] = useState(false)
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setLoading(true)
+    setAlert({ message: '', type: 'error' })
+
+    try {
+      const res = await api.post('/api/users/login/', { username, password })
+      const data = res.data
+
+      if (data.two_factor_required || data['2fa_required']) {
+        sessionStorage.setItem('2fa_username', username)
+        navigate('/verify-2fa')
+        return
+      }
+
+      if (data.access) {
+        sessionStorage.setItem('access_token', data.access)
+        sessionStorage.setItem('refresh_token', data.refresh)
+        navigate('/dashboard')
+      }
+    } catch (err: any) {
+      if (err.response?.status === 429) {
+        setAlert({ message: 'Muitas tentativas. Aguarde um momento e tente novamente.', type: 'error' })
+      } else {
+        const data = err.response?.data
+        setAlert({ message: data?.detail || data?.non_field_errors?.[0] || 'Credenciais inválidas.', type: 'error' })
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <Layout>
+      <div className="card">
+        <h1>Entrar</h1>
+        <Alert message={alert.message} type={alert.type} />
+        <form onSubmit={handleSubmit}>
+          <div className="form-group">
+            <label>Usuário</label>
+            <input type="text" value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" required />
+          </div>
+          <div className="form-group">
+            <label>Senha</label>
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" required />
+          </div>
+          <button type="submit" disabled={loading}>{loading ? 'Entrando…' : 'Entrar'}</button>
+        </form>
+        <p className="text-muted text-center">
+          Não tem conta? <Link to="/register">Registrar</Link>
+        </p>
+        <p className="text-muted text-center">
+          <Link to="/password-reset">Esqueci minha senha</Link>
+        </p>
+      </div>
+    </Layout>
+  )
+}
