@@ -20,16 +20,16 @@ export default function Login() {
       const res = await api.post('/api/users/login/', { email, password })
       const data = res.data
 
-      if (data.two_factor_required || data['2fa_required']) {
-        sessionStorage.setItem('2fa_email', email)
+      if (data.totp_required) {
+        sessionStorage.setItem('pending_token', data.pending_token)
         navigate('/verify-2fa')
         return
       }
 
-      if (data.access) {
-        sessionStorage.setItem('access_token', data.access)
-        sessionStorage.setItem('refresh_token', data.refresh)
-        navigate('/dashboard')
+      if (data.setup_required) {
+        sessionStorage.setItem('pending_token', data.pending_token)
+        navigate('/setup-2fa')
+        return
       }
     } catch (err: any) {
       if (err.response?.status === 429) {
