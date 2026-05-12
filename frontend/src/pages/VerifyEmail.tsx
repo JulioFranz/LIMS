@@ -40,7 +40,7 @@ export default function VerifyEmail() {
       <div className="card">
         <h1>Verificar e-mail</h1>
         <p style={{ color: '#6b7280', fontSize: '.9rem', marginBottom: '1.25rem' }}>
-          Insira o código de verificação enviado para seu e-mail.
+          Verifique sua caixa de entrada. Você pode ter recebido o <strong>código de verificação</strong> para ativar sua conta, ou um <strong>e-mail informando que já existe uma conta</strong> cadastrada com esse endereço.
         </p>
         <Alert message={alert.message} type={alert.type} />
         <form onSubmit={handleSubmit}>
