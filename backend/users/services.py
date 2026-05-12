@@ -29,7 +29,7 @@ audit_logger = logging.getLogger("users.audit")
 
 def _create_token(user: User, change_type: str, new_value: str = "") -> str:
     token_id = str(uuid.uuid4())
-    secret = str(uuid.uuid4())
+    secret = f"{secrets.randbelow(1_000_000):06d}"
     secret_hash = _hash_secret(secret)
 
     ProfileChangeToken.objects.filter(user=user, change_type=change_type).delete()
