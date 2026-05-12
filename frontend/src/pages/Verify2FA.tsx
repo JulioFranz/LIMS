@@ -15,13 +15,9 @@ export default function Verify2FA() {
     setLoading(true)
     setAlert({ message: '', type: 'error' })
 
-    const username = sessionStorage.getItem('2fa_username')
-    const body: Record<string, string> = { token: token.trim() }
-    if (username) body.username = username
-
     try {
-      const res = await api.post('/api/users/login/verify/', body)
-      sessionStorage.removeItem('2fa_username')
+      const res = await api.post('/api/users/login/verify/', { token: token.trim() })
+      sessionStorage.removeItem('2fa_email')
       sessionStorage.setItem('access_token', res.data.access)
       sessionStorage.setItem('refresh_token', res.data.refresh)
       navigate('/dashboard')
@@ -53,7 +49,7 @@ export default function Verify2FA() {
               value={token}
               onChange={e => setToken(e.target.value)}
               autoComplete="one-time-code"
-              placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+              placeholder="000000"
               required
             />
           </div>

@@ -4,6 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.throttling import AnonRateThrottle
 from django.contrib.auth import authenticate
+from django.contrib.auth.models import User
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .serializers import (
@@ -65,10 +66,14 @@ class LoginView(APIView):
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        user = authenticate(
-            username=serializer.validated_data['username'],
-            password=serializer.validated_data['password']
-        )
+        email = serializer.validated_data['email']
+        password = serializer.validated_data['password']
+
+        try:
+            user_obj = User.objects.get(email__iexact=email.strip())
+            user = authenticate(username=user_obj.username, password=password)
+        except (User.DoesNotExist, User.MultipleObjectsReturned):
+            user = None
 
         if user:
             generate_2fa_token(user)

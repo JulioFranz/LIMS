@@ -6,7 +6,7 @@ import Layout from '../components/Layout'
 
 export default function Login() {
   const navigate = useNavigate()
-  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [alert, setAlert] = useState({ message: '', type: 'error' as 'error' | 'success' })
   const [loading, setLoading] = useState(false)
@@ -17,11 +17,11 @@ export default function Login() {
     setAlert({ message: '', type: 'error' })
 
     try {
-      const res = await api.post('/api/users/login/', { username, password })
+      const res = await api.post('/api/users/login/', { email, password })
       const data = res.data
 
       if (data.two_factor_required || data['2fa_required']) {
-        sessionStorage.setItem('2fa_username', username)
+        sessionStorage.setItem('2fa_email', email)
         navigate('/verify-2fa')
         return
       }
@@ -50,8 +50,8 @@ export default function Login() {
         <Alert message={alert.message} type={alert.type} />
         <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label>Usuário</label>
-            <input type="text" value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" required />
+            <label>E-mail</label>
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" required />
           </div>
           <div className="form-group">
             <label>Senha</label>
