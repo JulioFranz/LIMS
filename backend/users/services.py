@@ -116,7 +116,23 @@ def _hash_secret(secret: str) -> str:
 
 
 @transaction.atomic
-def register_user(username: str, email: str, password: str) -> User:
+def register_user(username: str, email: str, password: str) -> User | None:
+    # LGPD: não revelar se o e-mail já existe — notifica discretamente o titular
+    if User.objects.filter(email__iexact=email.strip()).exists():
+        _send_email(
+            "Tentativa de cadastro - LIMS",
+            (
+                f"Olá,<br><br>"
+                f"Recebemos uma tentativa de criar uma conta com este endereço de e-mail, "
+                f"mas já existe uma conta associada a ele.<br><br>"
+                f"Se você já tem uma conta, acesse normalmente. "
+                f"Caso tenha esquecido sua senha, <a href=\"{settings.FRONTEND_URL}/password-reset\">clique aqui para redefini-la</a>.<br><br>"
+                f"Se não foi você quem fez esta solicitação, ignore este e-mail."
+            ),
+            email,
+        )
+        return None
+
     user = User.objects.create_user(username=username, email=email, password=password)
     UserProfile.objects.create(user=user, is_verified=False)
 
@@ -124,7 +140,7 @@ def register_user(username: str, email: str, password: str) -> User:
         secret = _create_token(user, "verify")
         _send_email(
             "Verifique sua conta",
-            f"Bem-vindo! Use este token para verificar sua conta: {secret}",
+            f"Bem-vindo! Use este código para verificar sua conta: <strong>{secret}</strong>",
             user.email
         )
     except Exception:
