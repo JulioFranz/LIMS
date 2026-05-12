@@ -10,12 +10,19 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers import (
     RegisterSerializer, LoginSerializer, TwoFactorSerializer,
     PasswordResetRequestSerializer, PasswordResetConfirmSerializer,
+    TOTPPendingSerializer, TOTPCodeSerializer, DisableTOTPSerializer,
 )
 from .services import (
-    register_user, generate_2fa_token, validate_2fa_and_get_jwt,
+    register_user,
     confirm_email_verification,
     request_password_reset, confirm_password_reset,
+    create_totp_pending_token, create_totp_setup_pending_token,
+    get_totp_setup_uri, confirm_totp_setup_and_get_jwt,
+    validate_totp_login_and_get_jwt, disable_totp,
 )
+from .selectors import get_profile
+from .crypto import decrypt_value
+import pyotp
 
 
 class AuthThrottle(AnonRateThrottle):
@@ -39,7 +46,7 @@ class RegisterView(APIView):
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = register_user(**serializer.validated_data)
+        register_user(**serializer.validated_data)
         return Response({"detail": "Usuário criado. Verifique seu e-mail."}, status=status.HTTP_201_CREATED)
 
 
@@ -75,28 +82,84 @@ class LoginView(APIView):
         except (User.DoesNotExist, User.MultipleObjectsReturned):
             user = None
 
-        if user:
-            generate_2fa_token(user)
-            return Response({
-                "detail": "Código 2FA enviado para seu e-mail.",
-                "2fa_required": True
-            })
+        if not user:
+            return Response({"detail": "Credenciais inválidas."}, status=status.HTTP_401_UNAUTHORIZED)
 
-        return Response({"detail": "Credenciais inválidas."}, status=status.HTTP_401_UNAUTHORIZED)
+        profile = get_profile(user)
+
+        if profile and profile.totp_enabled:
+            pending_token = create_totp_pending_token(user)
+            return Response({"totp_required": True, "pending_token": pending_token})
+
+        pending_token = create_totp_setup_pending_token(user)
+        return Response({"setup_required": True, "pending_token": pending_token})
 
 
 class Verify2FAView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        serializer = TwoFactorSerializer(data=request.data)
+        serializer = TOTPCodeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         try:
-            tokens = validate_2fa_and_get_jwt(serializer.validated_data['token'])
+            tokens = validate_totp_login_and_get_jwt(
+                serializer.validated_data['pending_token'],
+                serializer.validated_data['totp_code'],
+            )
             return Response(tokens)
         except ValueError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class Setup2FAView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = TOTPPendingSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            result = get_totp_setup_uri(serializer.validated_data['pending_token'])
+            return Response(result)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ConfirmSetup2FAView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = TOTPCodeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            tokens = confirm_totp_setup_and_get_jwt(
+                serializer.validated_data['pending_token'],
+                serializer.validated_data['totp_code'],
+            )
+            return Response(tokens)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class Disable2FAView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = DisableTOTPSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        profile = get_profile(request.user)
+        if not profile or not profile.totp_enabled:
+            return Response({"detail": "2FA não está ativado."}, status=status.HTTP_400_BAD_REQUEST)
+
+        secret = decrypt_value(profile.totp_secret)
+        if not pyotp.TOTP(secret).verify(serializer.validated_data['totp_code'].strip(), valid_window=1):
+            return Response({"detail": "Código inválido."}, status=status.HTTP_400_BAD_REQUEST)
+
+        disable_totp(request.user)
+        return Response({"detail": "2FA desativado com sucesso."})
 
 
 class LogoutView(APIView):
@@ -115,13 +178,6 @@ class LogoutView(APIView):
 # ---------- Recuperação de senha ----------
 
 class PasswordResetRequestView(APIView):
-    """
-    Requisito 2.1 — funcionalidade implementada (etapa de solicitação).
-    Requisito 2.6 — log da solicitação.
-
-    Resposta sempre idêntica (existindo ou não o e-mail) para não permitir
-    enumeração de usuários.
-    """
     permission_classes = [AllowAny]
     throttle_classes = [PasswordResetThrottle]
 
@@ -146,11 +202,6 @@ class PasswordResetRequestView(APIView):
 
 
 class PasswordResetConfirmView(APIView):
-    """
-    Requisito 2.1 — funcionalidade implementada (etapa de confirmação).
-    Requisitos 2.2, 2.3, 2.4, 2.5 — validação e invalidação do token.
-    Requisito 2.7 — log de sucesso/falha.
-    """
     permission_classes = [AllowAny]
     throttle_classes = [PasswordResetThrottle]
 

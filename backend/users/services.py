@@ -3,6 +3,7 @@ import os
 import secrets
 import uuid
 
+import pyotp
 import sib_api_v3_sdk
 from django.conf import settings
 from django.contrib.auth.models import User
@@ -173,44 +174,133 @@ def confirm_email_verification(token_str: str) -> None:
     token_obj.delete()
 
 
-# ---------- 2FA ----------
+# ---------- TOTP (Google Authenticator) ----------
 
-def generate_2fa_token(user: User) -> str:
-    secret = _create_token(user, "2fa_login")
-    _send_email(
-        subject="Seu código de Autenticação em Duas Etapas (2FA)",
-        message=f"Olá {user.username},\n\nPara concluir seu login, utilize o token abaixo:\n\n{secret}\n\nEste token expira em 15 minutos.",
-        recipient=user.email
+def _create_pending_token(user: User, change_type: str) -> str:
+    token_id = uuid.uuid4()
+    ProfileChangeToken.objects.filter(user=user, change_type=change_type).delete()
+    ProfileChangeToken.objects.create(
+        user=user,
+        token=token_id,
+        change_type=change_type,
+        new_value='',
+        token_hash='',
     )
-    logger.info(f"Token 2FA gerado para o usuário {user.username}.")
-    return secret
+    return str(token_id)
 
 
-def validate_2fa_and_get_jwt(token_str: str) -> dict:
-    secret_hash = _hash_secret(token_str)
+def create_totp_pending_token(user: User) -> str:
+    return _create_pending_token(user, 'totp_pending')
+
+
+def create_totp_setup_pending_token(user: User) -> str:
+    return _create_pending_token(user, 'totp_setup_pending')
+
+
+def get_totp_setup_uri(pending_token_id: str) -> dict:
     from .selectors import _expiration_for
 
-    token_obj = (
-        ProfileChangeToken.objects
-        .select_related("user")
-        .filter(change_type="2fa_login", token_hash=secret_hash)
-        .first()
-    )
-    if token_obj is None:
+    try:
+        token_obj = (
+            ProfileChangeToken.objects
+            .select_related('user')
+            .get(token=pending_token_id, change_type='totp_setup_pending')
+        )
+    except (ProfileChangeToken.DoesNotExist, Exception):
         raise ValueError("Token inválido.")
 
-    if timezone.now() > token_obj.created_at + _expiration_for("2fa_login"):
+    if timezone.now() > token_obj.created_at + _expiration_for('totp_setup_pending'):
         token_obj.delete()
-        raise ValueError("Token expirado.")
+        raise ValueError("Sessão expirada. Faça login novamente.")
+
+    secret = pyotp.random_base32()
+    qr_uri = pyotp.TOTP(secret).provisioning_uri(
+        name=token_obj.user.email,
+        issuer_name="LIMS"
+    )
+
+    token_obj.new_value = encrypt_value(secret)
+    token_obj.save(update_fields=['new_value'])
+
+    return {'qr_uri': qr_uri, 'secret': secret}
+
+
+@transaction.atomic
+def confirm_totp_setup_and_get_jwt(pending_token_id: str, totp_code: str) -> dict:
+    from .selectors import _expiration_for
+
+    try:
+        token_obj = (
+            ProfileChangeToken.objects
+            .select_for_update()
+            .select_related('user__profile')
+            .get(token=pending_token_id, change_type='totp_setup_pending')
+        )
+    except (ProfileChangeToken.DoesNotExist, Exception):
+        raise ValueError("Token inválido.")
+
+    if timezone.now() > token_obj.created_at + _expiration_for('totp_setup_pending'):
+        token_obj.delete()
+        raise ValueError("Sessão expirada. Faça login novamente.")
+
+    if not token_obj.new_value:
+        raise ValueError("Inicie a configuração antes de confirmar.")
+
+    secret = decrypt_value(token_obj.new_value)
+
+    if not pyotp.TOTP(secret).verify(totp_code.strip(), valid_window=1):
+        raise ValueError("Código inválido. Verifique o app e tente novamente.")
+
+    profile = token_obj.user.profile
+    profile.totp_secret = encrypt_value(secret)
+    profile.totp_enabled = True
+    profile.save(update_fields=['totp_secret', 'totp_enabled'])
+
+    token_obj.delete()
+
+    refresh = RefreshToken.for_user(token_obj.user)
+    logger.info(f"TOTP ativado para o usuário {token_obj.user.username}.")
+    return {'access': str(refresh.access_token), 'refresh': str(refresh)}
+
+
+@transaction.atomic
+def validate_totp_login_and_get_jwt(pending_token_id: str, totp_code: str) -> dict:
+    from .selectors import _expiration_for
+
+    try:
+        token_obj = (
+            ProfileChangeToken.objects
+            .select_for_update()
+            .select_related('user__profile')
+            .get(token=pending_token_id, change_type='totp_pending')
+        )
+    except (ProfileChangeToken.DoesNotExist, Exception):
+        raise ValueError("Token inválido.")
+
+    if timezone.now() > token_obj.created_at + _expiration_for('totp_pending'):
+        token_obj.delete()
+        raise ValueError("Sessão expirada. Faça login novamente.")
+
+    profile = token_obj.user.profile
+    secret = decrypt_value(profile.totp_secret)
+
+    if not pyotp.TOTP(secret).verify(totp_code.strip(), valid_window=1):
+        raise ValueError("Código inválido ou expirado.")
 
     user = token_obj.user
-    refresh = RefreshToken.for_user(user)
     token_obj.delete()
-    logger.info(f"Login com 2FA concluído com sucesso para o usuário {user.username}.")
-    return {
-        "access": str(refresh.access_token),
-        "refresh": str(refresh),
-    }
+
+    refresh = RefreshToken.for_user(user)
+    logger.info(f"Login com TOTP concluído para o usuário {user.username}.")
+    return {'access': str(refresh.access_token), 'refresh': str(refresh)}
+
+
+def disable_totp(user: User) -> None:
+    profile = user.profile
+    profile.totp_secret = ''
+    profile.totp_enabled = False
+    profile.save(update_fields=['totp_secret', 'totp_enabled'])
+    logger.info(f"TOTP desativado para o usuário {user.username}.")
 
 
 # ---------- Recuperação de senha ----------

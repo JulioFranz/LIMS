@@ -26,6 +26,19 @@ class TwoFactorSerializer(serializers.Serializer):
     token = serializers.CharField()
 
 
+class TOTPPendingSerializer(serializers.Serializer):
+    pending_token = serializers.CharField()
+
+
+class TOTPCodeSerializer(serializers.Serializer):
+    pending_token = serializers.CharField()
+    totp_code = serializers.CharField(min_length=6, max_length=6)
+
+
+class DisableTOTPSerializer(serializers.Serializer):
+    totp_code = serializers.CharField(min_length=6, max_length=6)
+
+
 class PasswordResetRequestSerializer(serializers.Serializer):
     email = serializers.EmailField()
 
