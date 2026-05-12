@@ -7,11 +7,13 @@ from .models import ProfileChangeToken, UserProfile
 #tipos de token
 TOKEN_EXPIRATION_MINUTES = {
     '2fa_login': 15,
-    'verify': 60 * 24,  # 24h para verificar email
-    'password_reset': 30,  # 30 min para resetar senha
+    'verify': 60 * 24,
+    'password_reset': 30,
     'email': 60,
     'email_new': 60,
     'password': 15,
+    'totp_pending': 10,
+    'totp_setup_pending': 10,
 }
 DEFAULT_EXPIRATION_MINUTES = 15
 

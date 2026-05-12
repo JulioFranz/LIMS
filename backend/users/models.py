@@ -6,6 +6,8 @@ class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
     avatar = models.ImageField(upload_to='avatars/', null=True, blank=True)
     is_verified = models.BooleanField(default=False)
+    totp_enabled = models.BooleanField(default=False)
+    totp_secret = models.CharField(max_length=512, blank=True, default='')
 
     def __str__(self):
         return f"Profile of {self.user.username}"
@@ -19,6 +21,8 @@ class ProfileChangeToken(models.Model):
         ('verify', 'Verify'),
         ('2fa_login', '2FA Login'),
         ('password_reset', 'Password Reset'),
+        ('totp_pending', 'TOTP Pending Login'),
+        ('totp_setup_pending', 'TOTP Setup Pending'),
     ]
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='change_tokens')
     token = models.UUIDField(unique=True)
