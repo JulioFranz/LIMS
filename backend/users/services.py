@@ -232,7 +232,6 @@ def confirm_totp_setup_and_get_jwt(pending_token_id: str, totp_code: str) -> dic
     try:
         token_obj = (
             ProfileChangeToken.objects
-            .select_for_update()
             .select_related('user__profile')
             .get(token=pending_token_id, change_type='totp_setup_pending')
         )
@@ -270,7 +269,6 @@ def validate_totp_login_and_get_jwt(pending_token_id: str, totp_code: str) -> di
     try:
         token_obj = (
             ProfileChangeToken.objects
-            .select_for_update()
             .select_related('user__profile')
             .get(token=pending_token_id, change_type='totp_pending')
         )
