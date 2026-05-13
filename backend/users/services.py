@@ -247,6 +247,10 @@ def confirm_totp_setup_and_get_jwt(pending_token_id: str, totp_code: str) -> dic
 
     secret = decrypt_value(token_obj.new_value)
 
+    import datetime
+    expected = pyotp.TOTP(secret).now()
+    logger.info(f"TOTP debug - server_utc={datetime.datetime.utcnow()} secret_len={len(secret)} received='{totp_code.strip()}' expected='{expected}'")
+
     if not pyotp.TOTP(secret).verify(totp_code.strip(), valid_window=2):
         raise ValueError("Código inválido. Verifique o app e tente novamente.")
 
