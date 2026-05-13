@@ -24,9 +24,10 @@ if RENDER_HOSTNAME:
 
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
 
-CORS_ALLOWED_ORIGINS = [
+CORS_ALLOWED_ORIGINS = list(filter(None, [
     'http://localhost:5173',
-]
+    os.getenv('FRONTEND_URL'),
+]))
 CORS_ALLOW_ALL_ORIGINS = DEBUG
 
 PASSWORD_HASHERS = [
