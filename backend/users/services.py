@@ -247,7 +247,7 @@ def confirm_totp_setup_and_get_jwt(pending_token_id: str, totp_code: str) -> dic
 
     secret = decrypt_value(token_obj.new_value)
 
-    if not pyotp.TOTP(secret).verify(totp_code.strip(), valid_window=1):
+    if not pyotp.TOTP(secret).verify(totp_code.strip(), valid_window=2):
         raise ValueError("Código inválido. Verifique o app e tente novamente.")
 
     profile = token_obj.user.profile
@@ -282,7 +282,7 @@ def validate_totp_login_and_get_jwt(pending_token_id: str, totp_code: str) -> di
     profile = token_obj.user.profile
     secret = decrypt_value(profile.totp_secret)
 
-    if not pyotp.TOTP(secret).verify(totp_code.strip(), valid_window=1):
+    if not pyotp.TOTP(secret).verify(totp_code.strip(), valid_window=2):
         raise ValueError("Código inválido ou expirado.")
 
     user = token_obj.user
