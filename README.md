@@ -3,6 +3,7 @@
 Sistema de autenticação com 2FA, recuperação de senha e cifragem de dados sensíveis. Projeto Integrador da disciplina de Políticas de Segurança da Informação.
 
 **Demo:** https://lims-front.vercel.app/
+
 Para a hospedagem, utilizamos a Vercel no Front-End e o Render no Back-End. Devido às limitações do plano gratuito do Render, o serviço entra em modo de repouso após períodos de inatividade. Por isso, a primeira requisição pode levar alguns minutos para ser processada enquanto a instância é reiniciada automaticamente.
 
 ## Configuração
