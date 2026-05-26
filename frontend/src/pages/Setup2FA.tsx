@@ -30,7 +30,7 @@ export default function Setup2FA() {
       })
       .catch(() => navigate('/'))
       .finally(() => setFetching(false))
-  }, [])
+  }, [navigate, pendingToken])
 
   async function handleConfirm(e: React.FormEvent) {
     e.preventDefault()
@@ -38,16 +38,15 @@ export default function Setup2FA() {
     setAlert({ message: '', type: 'error' })
 
     try {
-      const res = await api.post('/api/users/2fa/setup/confirm/', {
+      await api.post('/api/users/2fa/setup/confirm/', {
         pending_token: pendingToken,
         totp_code: totpCode.trim(),
       })
       sessionStorage.removeItem('pending_token')
-      sessionStorage.setItem('access_token', res.data.access)
-      sessionStorage.setItem('refresh_token', res.data.refresh)
       navigate('/dashboard')
-    } catch (err: any) {
-      const data = err.response?.data
+    } catch (err) {
+      const error = err as { response?: { data?: { detail?: string } } }
+      const data = error.response?.data
       setAlert({ message: data?.detail || 'Código inválido. Tente novamente.', type: 'error' })
     } finally {
       setLoading(false)

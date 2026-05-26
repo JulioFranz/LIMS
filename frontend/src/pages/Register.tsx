@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import api from '../api/client'
+import { humanizeApiError } from '../api/errors'
 import Alert from '../components/Alert'
 import Layout from '../components/Layout'
 
@@ -21,10 +22,8 @@ export default function Register() {
       await api.post('/api/users/register/', { username, email, password })
       setAlert({ message: 'Conta criada! Redirecionando para verificação de e-mail…', type: 'success' })
       setTimeout(() => navigate('/verify-email'), 2000)
-    } catch (err: any) {
-      const data = err.response?.data
-      const firstError = data ? (Object.values(data).flat()[0] as string) : null
-      setAlert({ message: firstError || 'Erro ao criar conta.', type: 'error' })
+    } catch (err: unknown) {
+      setAlert({ message: humanizeApiError(err, 'Erro ao criar conta.'), type: 'error' })
     } finally {
       setLoading(false)
     }

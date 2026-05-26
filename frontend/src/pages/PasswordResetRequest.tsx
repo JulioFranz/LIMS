@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import axios from 'axios'
 import api from '../api/client'
 import Layout from '../components/Layout'
 
@@ -17,8 +18,8 @@ export default function PasswordResetRequest() {
       const res = await api.post('/api/users/password-reset/', { email })
       setMessage(res.data?.detail || 'Solicitação recebida.')
       setEmail('')
-    } catch (err: any) {
-      if (err.response?.status === 429) {
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err) && err.response?.status === 429) {
         setMessage('Muitas solicitações. Tente novamente mais tarde.')
       } else {
         setMessage('Erro ao processar a solicitação. Tente novamente.')

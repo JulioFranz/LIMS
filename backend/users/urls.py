@@ -3,6 +3,7 @@ from .views import (
     RegisterView, LoginView, Verify2FAView, LogoutView, VerifyEmailView,
     PasswordResetRequestView, PasswordResetConfirmView,
     Setup2FAView, ConfirmSetup2FAView, Disable2FAView,
+    TokenRefreshCookieView, MeView,
 )
 
 urlpatterns = [
@@ -16,4 +17,6 @@ urlpatterns = [
     path('2fa/setup/', Setup2FAView.as_view(), name='2fa-setup'),
     path('2fa/setup/confirm/', ConfirmSetup2FAView.as_view(), name='2fa-setup-confirm'),
     path('2fa/disable/', Disable2FAView.as_view(), name='2fa-disable'),
+    path('token/refresh/', TokenRefreshCookieView.as_view(), name='token-refresh-cookie'),
+    path('me/', MeView.as_view(), name='me'),
 ]

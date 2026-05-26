@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useNavigate, Link, useSearchParams } from 'react-router-dom'
+import axios from 'axios'
 import api from '../api/client'
 import Alert from '../components/Alert'
 import Layout from '../components/Layout'
@@ -7,15 +8,10 @@ import Layout from '../components/Layout'
 export default function VerifyEmail() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const [token, setToken] = useState('')
+  const [token, setToken] = useState(() => searchParams.get('token') || '')
   const [alert, setAlert] = useState({ message: '', type: 'error' as 'error' | 'success' })
   const [loading, setLoading] = useState(false)
   const [done, setDone] = useState(false)
-
-  useEffect(() => {
-    const t = searchParams.get('token')
-    if (t) setToken(t)
-  }, [searchParams])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -27,9 +23,12 @@ export default function VerifyEmail() {
       setAlert({ message: 'E-mail verificado com sucesso! Você já pode fazer login.', type: 'success' })
       setDone(true)
       setTimeout(() => navigate('/'), 2000)
-    } catch (err: any) {
-      const data = err.response?.data
-      setAlert({ message: data?.detail || 'Token inválido ou expirado.', type: 'error' })
+    } catch (err: unknown) {
+      let detail: string | undefined
+      if (axios.isAxiosError(err)) {
+        detail = err.response?.data?.detail
+      }
+      setAlert({ message: detail || 'Token inválido ou expirado.', type: 'error' })
     } finally {
       setLoading(false)
     }

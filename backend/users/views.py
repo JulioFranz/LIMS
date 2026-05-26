@@ -3,9 +3,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.throttling import AnonRateThrottle
+from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 
 from .serializers import (
     RegisterSerializer, LoginSerializer, TwoFactorSerializer,
@@ -25,12 +28,64 @@ from .crypto import decrypt_value
 import pyotp
 
 
+# ---------- Throttles ----------
+
 class AuthThrottle(AnonRateThrottle):
     scope = 'auth'
 
 
 class PasswordResetThrottle(AnonRateThrottle):
     scope = 'password_reset'
+
+
+class TotpThrottle(AnonRateThrottle):
+    """Mitiga brute force contra códigos TOTP de 6 dígitos."""
+    scope = 'totp'
+
+
+# ---------- Cookie helpers ----------
+
+def _set_auth_cookies(response: Response, access: str, refresh: str) -> None:
+    """Grava access/refresh como cookies HttpOnly. SameSite e Secure são
+    derivados das settings (`AUTH_COOKIE_SAMESITE`, `AUTH_COOKIE_SECURE`)."""
+    samesite = getattr(settings, 'AUTH_COOKIE_SAMESITE', 'Strict')
+    secure = getattr(settings, 'AUTH_COOKIE_SECURE', not settings.DEBUG)
+    access_max_age = int(settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'].total_seconds())
+    refresh_max_age = int(settings.SIMPLE_JWT['REFRESH_TOKEN_LIFETIME'].total_seconds())
+
+    response.set_cookie(
+        key='access_token',
+        value=access,
+        max_age=access_max_age,
+        httponly=True,
+        secure=secure,
+        samesite=samesite,
+        path='/',
+    )
+    response.set_cookie(
+        key='refresh_token',
+        value=refresh,
+        max_age=refresh_max_age,
+        httponly=True,
+        secure=secure,
+        samesite=samesite,
+        path='/',
+    )
+
+
+def _clear_auth_cookies(response: Response) -> None:
+    samesite = getattr(settings, 'AUTH_COOKIE_SAMESITE', 'Strict')
+    secure = getattr(settings, 'AUTH_COOKIE_SECURE', not settings.DEBUG)
+    response.delete_cookie('access_token', path='/', samesite=samesite)
+    response.delete_cookie('refresh_token', path='/', samesite=samesite)
+    # Defensivo: alguns navegadores exigem mesmo secure flag para apagar
+    if secure:
+        response.delete_cookie('access_token', path='/')
+        response.delete_cookie('refresh_token', path='/')
+
+
+def _public_user(user: User) -> dict:
+    return {'username': user.username, 'email': user.email}
 
 
 def _client_ip(request) -> str:
@@ -97,6 +152,7 @@ class LoginView(APIView):
 
 class Verify2FAView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [TotpThrottle]
 
     def post(self, request):
         serializer = TOTPCodeSerializer(data=request.data)
@@ -107,13 +163,17 @@ class Verify2FAView(APIView):
                 serializer.validated_data['pending_token'],
                 serializer.validated_data['totp_code'],
             )
-            return Response(tokens)
         except ValueError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        response = Response({"detail": "ok"}, status=status.HTTP_200_OK)
+        _set_auth_cookies(response, tokens['access'], tokens['refresh'])
+        return response
 
 
 class Setup2FAView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [TotpThrottle]
 
     def post(self, request):
         serializer = TOTPPendingSerializer(data=request.data)
@@ -128,6 +188,7 @@ class Setup2FAView(APIView):
 
 class ConfirmSetup2FAView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [TotpThrottle]
 
     def post(self, request):
         serializer = TOTPCodeSerializer(data=request.data)
@@ -138,13 +199,55 @@ class ConfirmSetup2FAView(APIView):
                 serializer.validated_data['pending_token'],
                 serializer.validated_data['totp_code'],
             )
-            return Response(tokens)
         except ValueError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        response = Response({"detail": "ok"}, status=status.HTTP_200_OK)
+        _set_auth_cookies(response, tokens['access'], tokens['refresh'])
+        return response
+
+
+class TokenRefreshCookieView(APIView):
+    """Lê o cookie `refresh_token`, valida e devolve um novo par de cookies."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        raw = request.COOKIES.get('refresh_token')
+        if not raw:
+            return Response(
+                {"detail": "Refresh ausente."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        serializer = TokenRefreshSerializer(data={'refresh': raw})
+        try:
+            serializer.is_valid(raise_exception=True)
+        except (TokenError, Exception):
+            return Response(
+                {"detail": "Refresh inválido ou expirado."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        data = serializer.validated_data
+        new_refresh = data.get('refresh', raw)  # rotação só se ROTATE_REFRESH_TOKENS=True
+
+        response = Response({"detail": "ok"}, status=status.HTTP_200_OK)
+        _set_auth_cookies(response, data['access'], new_refresh)
+        return response
+
+
+class MeView(APIView):
+    """Identidade do usuário autenticado — usado pelo frontend para
+    substituir a leitura local do JWT (que agora é HttpOnly)."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(_public_user(request.user))
 
 
 class Disable2FAView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_classes = [TotpThrottle]
 
     def post(self, request):
         serializer = DisableTOTPSerializer(data=request.data)
@@ -166,13 +269,20 @@ class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        raw = request.COOKIES.get('refresh_token') or request.data.get('refresh')
         try:
-            refresh_token = request.data.get("refresh")
-            token = RefreshToken(refresh_token)
-            token.blacklist()
-            return Response({"detail": "Logout realizado com sucesso."}, status=status.HTTP_205_RESET_CONTENT)
+            if raw:
+                RefreshToken(raw).blacklist()
         except Exception:
-            return Response(status=status.HTTP_400_BAD_REQUEST)
+            # Não bloqueia o logout — sempre limpamos os cookies do navegador
+            pass
+
+        response = Response(
+            {"detail": "Logout realizado com sucesso."},
+            status=status.HTTP_205_RESET_CONTENT,
+        )
+        _clear_auth_cookies(response)
+        return response
 
 
 # ---------- Recuperação de senha ----------

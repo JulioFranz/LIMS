@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
+import axios from 'axios'
 import api from '../api/client'
 import Alert from '../components/Alert'
 import Layout from '../components/Layout'
@@ -18,16 +19,14 @@ export default function Verify2FA() {
     const pending_token = sessionStorage.getItem('pending_token')
 
     try {
-      const res = await api.post('/api/users/login/verify/', {
+      await api.post('/api/users/login/verify/', {
         pending_token,
         totp_code: totpCode.trim(),
       })
       sessionStorage.removeItem('pending_token')
-      sessionStorage.setItem('access_token', res.data.access)
-      sessionStorage.setItem('refresh_token', res.data.refresh)
       navigate('/dashboard')
-    } catch (err: any) {
-      if (err.response) {
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err) && err.response) {
         const data = err.response.data
         setAlert({ message: data?.detail || 'Código inválido ou expirado.', type: 'error' })
       } else {

@@ -28,7 +28,9 @@ CORS_ALLOWED_ORIGINS = list(filter(None, [
     'http://localhost:5173',
     os.getenv('FRONTEND_URL'),
 ]))
-CORS_ALLOW_ALL_ORIGINS = DEBUG
+# Credenciais (cookies HttpOnly) exigem origens explícitas — nunca '*'.
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOW_CREDENTIALS = True
 
 PASSWORD_HASHERS = [
     'LIMS.hashers.RenderArgon2Hasher',
@@ -37,13 +39,21 @@ PASSWORD_HASHERS = [
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
+        'users.authentication.CookieJWTAuthentication',
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
     'DEFAULT_THROTTLE_RATES': {
         'auth': '3/minute',
-        'password_reset': '5/hour'
+        'password_reset': '5/hour',
+        'totp': '5/minute',
     }
 }
+
+# Cookies de autenticação (HttpOnly). SameSite=Strict por padrão; em
+# deployments cross-origin (front em domínio diferente do backend) o
+# operador deve setar AUTH_COOKIE_SAMESITE=None + AUTH_COOKIE_SECURE=True.
+AUTH_COOKIE_SAMESITE = os.getenv('AUTH_COOKIE_SAMESITE', 'Strict')
+AUTH_COOKIE_SECURE = os.getenv('AUTH_COOKIE_SECURE', 'False' if DEBUG else 'True') == 'True'
 
 INSTALLED_APPS = [
     'django.contrib.admin',

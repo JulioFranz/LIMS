@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate, Link, useSearchParams } from 'react-router-dom'
 import api from '../api/client'
+import { humanizeApiError } from '../api/errors'
 import Layout from '../components/Layout'
 
 export default function PasswordResetConfirm() {
@@ -29,12 +30,8 @@ export default function PasswordResetConfirm() {
       const res = await api.post('/api/users/password-reset/confirm/', { uid, token, new_password: newPassword })
       setMessage(res.data?.detail + ' Redirecionando para o login...')
       setTimeout(() => navigate('/'), 2500)
-    } catch (err: any) {
-      if (err.response?.status === 429) {
-        setMessage('Muitas tentativas. Tente novamente mais tarde.')
-      } else {
-        setMessage(err.response?.data?.detail || 'Não foi possível redefinir a senha.')
-      }
+    } catch (err: unknown) {
+      setMessage(humanizeApiError(err, 'Não foi possível redefinir a senha.'))
     } finally {
       setLoading(false)
     }

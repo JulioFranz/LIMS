@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import api from '../api/client'
+import { humanizeApiError } from '../api/errors'
 import Alert from '../components/Alert'
 import Layout from '../components/Layout'
 
@@ -31,13 +32,8 @@ export default function Login() {
         navigate('/setup-2fa')
         return
       }
-    } catch (err: any) {
-      if (err.response?.status === 429) {
-        setAlert({ message: 'Muitas tentativas. Aguarde um momento e tente novamente.', type: 'error' })
-      } else {
-        const data = err.response?.data
-        setAlert({ message: data?.detail || data?.non_field_errors?.[0] || 'Credenciais inválidas.', type: 'error' })
-      }
+    } catch (err: unknown) {
+      setAlert({ message: humanizeApiError(err, 'Credenciais inválidas.'), type: 'error' })
     } finally {
       setLoading(false)
     }
