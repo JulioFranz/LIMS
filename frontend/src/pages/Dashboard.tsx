@@ -1,27 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api/client'
-import Alert from '../components/Alert'
 import Layout from '../components/Layout'
 
-function parseJwt(token: string) {
-  try {
-    const payload = token.split('.')[1]
-    return JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')))
-  } catch {
-    return null
-  }
-}
-
-function formatDate(ts: number) {
-  return new Date(ts * 1000).toLocaleString('pt-BR')
-}
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const [alert] = useState({ message: '', type: 'error' as 'error' | 'success' })
   const [loading, setLoading] = useState(false)
-  const [payload, setPayload] = useState<Record<string, any> | null>(null)
 
   useEffect(() => {
     const accessToken = sessionStorage.getItem('access_token')
@@ -29,7 +14,6 @@ export default function Dashboard() {
       navigate('/')
       return
     }
-    setPayload(parseJwt(accessToken))
   }, [navigate])
 
   async function handleLogout() {
