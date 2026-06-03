@@ -8,6 +8,9 @@ class UserProfile(models.Model):
     is_verified = models.BooleanField(default=False)
     totp_enabled = models.BooleanField(default=False)
     totp_secret = models.CharField(max_length=512, blank=True, default='')
+    # LGPD 4.4 / 4.7 — Registro de consentimento
+    consent_accepted_at = models.DateTimeField(null=True, blank=True)
+    consent_version = models.CharField(max_length=20, blank=True, default='')
 
     def __str__(self):
         return f"Profile of {self.user.username}"
@@ -44,6 +47,7 @@ class AuditLog(models.Model):
     EVENTS = [
         ('password_reset_requested', 'Password Reset Requested'),
         ('password_reset_confirmed', 'Password Reset Confirmed'),
+        ('account_deleted', 'Account Deleted'),
     ]
     RESULTS = [
         ('email_sent', 'Email Sent'),

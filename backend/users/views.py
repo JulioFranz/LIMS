@@ -22,6 +22,7 @@ from .services import (
 )
 from .selectors import get_profile
 from .crypto import decrypt_value
+from .models import AuditLog
 import pyotp
 
 
@@ -223,3 +224,127 @@ class PasswordResetConfirmView(APIView):
             )
         except ValueError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# ---------- LGPD: Dados do titular (Requisitos 4.1 e 4.8) ----------
+
+class MeView(APIView):
+    """
+    GET /api/users/me/
+    Retorna todos os dados pessoais coletados sobre o titular autenticado,
+    com a finalidade e a base legal de cada campo — Art. 9º da LGPD.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        profile = get_profile(user)
+
+        # Logs de auditoria associados ao usuário (apenas eventos registrados)
+        audit_events = (
+            AuditLog.objects
+            .filter(user=user)
+            .order_by('-created_at')
+            .values('created_at', 'event', 'result', 'ip', 'user_agent')[:50]
+        )
+
+        audit_list = [
+            {
+                "data": e['created_at'].isoformat(),
+                "evento": e['event'],
+                "resultado": e['result'],
+                "ip": e['ip'] or "—",
+                "user_agent": e['user_agent'] or "—",
+            }
+            for e in audit_events
+        ]
+
+        dados_pessoais = [
+            {
+                "dado": "Nome de usuário",
+                "valor": user.username,
+                "finalidade": "Identificação única no sistema",
+                "base_legal": "Execução de contrato – Art. 7º, V, LGPD",
+            },
+            {
+                "dado": "Endereço de e-mail",
+                "valor": user.email,
+                "finalidade": "Comunicação, verificação de conta e recuperação de senha",
+                "base_legal": "Execução de contrato – Art. 7º, V, LGPD",
+            },
+            {
+                "dado": "Senha",
+                "valor": "Armazenada apenas como hash Argon2 (não recuperável)",
+                "finalidade": "Autenticação segura",
+                "base_legal": "Execução de contrato – Art. 7º, V, LGPD",
+            },
+            {
+                "dado": "Data de cadastro",
+                "valor": user.date_joined.isoformat(),
+                "finalidade": "Registro histórico e rastreabilidade da conta",
+                "base_legal": "Legítimo interesse – Art. 7º, IX, LGPD",
+            },
+            {
+                "dado": "Último acesso",
+                "valor": user.last_login.isoformat() if user.last_login else "Nunca registrado",
+                "finalidade": "Controle de sessão e detecção de acessos indevidos",
+                "base_legal": "Legítimo interesse – Art. 7º, IX, LGPD",
+            },
+            {
+                "dado": "E-mail verificado",
+                "valor": "Sim" if (profile and profile.is_verified) else "Não",
+                "finalidade": "Confirmar titularidade do endereço de e-mail",
+                "base_legal": "Execução de contrato – Art. 7º, V, LGPD",
+            },
+            {
+                "dado": "Autenticação de dois fatores (2FA)",
+                "valor": "Ativa" if (profile and profile.totp_enabled) else "Inativa",
+                "finalidade": "Proteção adicional da conta contra acesso não autorizado",
+                "base_legal": "Legítimo interesse – Art. 7º, IX, LGPD",
+            },
+            {
+                "dado": "Endereços IP (logs de auditoria)",
+                "valor": "Registrados em eventos de segurança (ver histórico abaixo)",
+                "finalidade": "Auditoria de segurança e rastreabilidade de incidentes",
+                "base_legal": "Legítimo interesse – Art. 7º, IX, LGPD",
+            },
+            {
+                "dado": "Agente de usuário (User-Agent)",
+                "valor": "Registrado em eventos de segurança (ver histórico abaixo)",
+                "finalidade": "Identificação do dispositivo em logs de auditoria",
+                "base_legal": "Legítimo interesse – Art. 7º, IX, LGPD",
+            },
+        ]
+
+        return Response({
+            "titular": user.username,
+            "dados_pessoais": dados_pessoais,
+            "historico_auditoria": audit_list,
+        })
+
+    def delete(self, request):
+        """
+        DELETE /api/users/me/
+        Revoga o consentimento e exclui a conta do usuário (LGPD 4.6 e 4.10).
+        """
+        user = request.user
+        
+        # Opcional: registrar em log de auditoria que a conta foi excluída
+        # Mas como o usuário será excluído e user será null, o email_hash pode ser usado.
+        email_hash = getattr(user.audit_logs.first(), 'email_hash', '') if user.audit_logs.exists() else ''
+        
+        # Registra a exclusão da conta em um log genérico sem o user
+        AuditLog.objects.create(
+            event='account_deleted',
+            result='success',
+            email_hash=email_hash,
+            ip=request.META.get('REMOTE_ADDR', ''),
+            user_agent=request.META.get('HTTP_USER_AGENT', '')
+        )
+        
+        user.delete()
+        
+        return Response(
+            {"detail": "Conta excluída e consentimento revogado com sucesso."},
+            status=status.HTTP_204_NO_CONTENT
+        )
