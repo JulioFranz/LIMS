@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import os
 import secrets
 import uuid
@@ -6,11 +7,10 @@ import uuid
 import pyotp
 import sib_api_v3_sdk
 from django.conf import settings
-from django.contrib.auth.models import User
+from django.contrib.auth.models import User, update_last_login
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.core.mail import send_mail
-from django.db import transaction
+from django.db import transaction, DatabaseError
 from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 import logging
@@ -18,8 +18,8 @@ import threading
 
 from sib_api_v3_sdk.rest import ApiException
 
-from .models import ProfileChangeToken, UserProfile
-from .selectors import get_token_info, get_password_reset_token
+from .models import AuditLog, ProfileChangeToken, UserProfile
+from .selectors import _expiration_for
 from .crypto import encrypt_value, decrypt_value
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,7 @@ audit_logger = logging.getLogger("users.audit")
 
 # ---------- Helpers ----------
 
+# Cria token de mudanca no banco
 def _create_token(user: User, change_type: str, new_value: str = "") -> str:
     token_id = str(uuid.uuid4())
     secret = f"{secrets.randbelow(1_000_000):06d}"
@@ -45,13 +46,11 @@ def _create_token(user: User, change_type: str, new_value: str = "") -> str:
 
 
 def get_token_new_value(token_obj) -> str:
-    """
-    Decifra o campo new_value de um ProfileChangeToken.
-    Use sempre que precisar ler new_value em outras partes do código.
-    """
+    """Decifra new_value, usar sempre que precisar ler o campo em outros módulos."""
     return decrypt_value(token_obj.new_value)
 
 
+# Disparo de email via Brevo
 def _send_email(subject: str, message: str, recipient: str) -> None:
     def send_task():
         configuration = sib_api_v3_sdk.Configuration()
@@ -72,7 +71,6 @@ def _send_email(subject: str, message: str, recipient: str) -> None:
         except ApiException as e:
             logger.error(f"Erro na API do Brevo ao enviar para {recipient}: {e}")
 
-    # Mantém o processamento em background
     threading.Thread(target=send_task).start()
 
 
@@ -81,10 +79,19 @@ def _hash_email(email: str) -> str:
     return hashlib.sha256(email.strip().lower().encode()).hexdigest()[:16]
 
 
+# Checksum HMAC-SHA256 dos campos de log, detecta alteracoes diretas do banco
+def _compute_audit_checksum(event: str, result: str, user_id: str, email_hash: str, ip: str, user_agent: str) -> str:
+    """HMAC-SHA256 dos campos do evento."""
+    payload = f"{event}|{result}|{user_id}|{email_hash}|{ip}|{user_agent}"
+    return hmac.new(settings.SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+
+# Registro de log estruturdo
 def _audit(event: str, result: str, *, user=None, email_hash: str = "",
            client_ip: str = "", user_agent: str = "") -> None:
-    """Grava evento de auditoria no banco e no arquivo de log."""
-    from .models import AuditLog
+    user_id_str = str(user.id) if user else ""
+    ua_truncated = user_agent[:200]
+    checksum = _compute_audit_checksum(event, result, user_id_str, email_hash, client_ip or "", ua_truncated)
 
     try:
         AuditLog.objects.create(
@@ -93,9 +100,11 @@ def _audit(event: str, result: str, *, user=None, email_hash: str = "",
             user=user,
             email_hash=email_hash,
             ip=client_ip or None,
-            user_agent=user_agent[:200],
+            user_agent=ua_truncated,
+            checksum=checksum,
         )
-    except Exception:
+    except DatabaseError:
+        # Log de auditoria não pode travar o fluxo principal
         logger.exception("Falha ao gravar AuditLog")
 
     audit_logger.info(
@@ -106,19 +115,19 @@ def _audit(event: str, result: str, *, user=None, email_hash: str = "",
             "user_id": user.id if user else "",
             "email_hash": email_hash,
             "ip": client_ip,
-            "user_agent": user_agent[:200],
+            "user_agent": ua_truncated,
         },
     )
 
 
 def _hash_secret(secret: str) -> str:
-    """SHA-256 hex do segredo do token de reset (Requisito 2.2)."""
+    """SHA-256 hex do segredo do token (Requisito 2.2 — armazenamento seguro)."""
     return hashlib.sha256(secret.encode()).hexdigest()
 
 
 @transaction.atomic
 def register_user(username: str, email: str, password: str, consent: bool = False) -> User | None:
-    # LGPD: não revelar se o e-mail já existe — notifica discretamente o titular
+    # nao revelar se o e-mail ja existe
     if User.objects.filter(email__iexact=email.strip()).exists():
         _send_email(
             "Tentativa de cadastro - LIMS",
@@ -136,7 +145,6 @@ def register_user(username: str, email: str, password: str, consent: bool = Fals
 
     user = User.objects.create_user(username=username, email=email, password=password)
 
-    # LGPD 4.4 / 4.7 — registra data e versão do consentimento
     UserProfile.objects.create(
         user=user,
         is_verified=False,
@@ -151,16 +159,15 @@ def register_user(username: str, email: str, password: str, consent: bool = Fals
             f"Bem-vindo! Use este código para verificar sua conta: <strong>{secret}</strong>",
             user.email
         )
-    except Exception:
+    except (DatabaseError, RuntimeError):
         logger.error(f"Falha ao enviar e-mail para {_hash_email(email)}", exc_info=True)
 
     return user
 
 
+# Verificacao de email via hash do segredo enviado
 def confirm_email_verification(token_str: str) -> None:
-    """Confirma e-mail validando o segredo via hash."""
     secret_hash = _hash_secret(token_str)
-    from .selectors import _expiration_for
 
     token_obj = (
         ProfileChangeToken.objects
@@ -204,16 +211,15 @@ def create_totp_setup_pending_token(user: User) -> str:
     return _create_pending_token(user, 'totp_setup_pending')
 
 
+# QR Code e segredo para TOTP
 def get_totp_setup_uri(pending_token_id: str) -> dict:
-    from .selectors import _expiration_for
-
     try:
         token_obj = (
             ProfileChangeToken.objects
             .select_related('user')
             .get(token=pending_token_id, change_type='totp_setup_pending')
         )
-    except (ProfileChangeToken.DoesNotExist, Exception):
+    except (ProfileChangeToken.DoesNotExist, DjangoValidationError):
         raise ValueError("Token inválido.")
 
     if timezone.now() > token_obj.created_at + _expiration_for('totp_setup_pending'):
@@ -232,17 +238,16 @@ def get_totp_setup_uri(pending_token_id: str) -> dict:
     return {'qr_uri': qr_uri, 'secret': secret}
 
 
+# Confirma o TOTP com codigo do app e emite JWT
 @transaction.atomic
 def confirm_totp_setup_and_get_jwt(pending_token_id: str, totp_code: str) -> dict:
-    from .selectors import _expiration_for
-
     try:
         token_obj = (
             ProfileChangeToken.objects
             .select_related('user__profile')
             .get(token=pending_token_id, change_type='totp_setup_pending')
         )
-    except (ProfileChangeToken.DoesNotExist, Exception):
+    except (ProfileChangeToken.DoesNotExist, DjangoValidationError):
         raise ValueError("Token inválido.")
 
     if timezone.now() > token_obj.created_at + _expiration_for('totp_setup_pending'):
@@ -254,10 +259,6 @@ def confirm_totp_setup_and_get_jwt(pending_token_id: str, totp_code: str) -> dic
 
     secret = decrypt_value(token_obj.new_value)
 
-    import datetime
-    expected = pyotp.TOTP(secret).now()
-    logger.info(f"TOTP debug - server_utc={datetime.datetime.utcnow()} secret_len={len(secret)} received='{totp_code.strip()}' expected='{expected}'")
-
     if not pyotp.TOTP(secret).verify(totp_code.strip(), valid_window=2):
         raise ValueError("Código inválido. Verifique o app e tente novamente.")
 
@@ -266,28 +267,32 @@ def confirm_totp_setup_and_get_jwt(pending_token_id: str, totp_code: str) -> dic
     profile.totp_enabled = True
     profile.save(update_fields=['totp_secret', 'totp_enabled'])
 
+    user = token_obj.user
     token_obj.delete()
 
-    from django.contrib.auth.models import update_last_login
-    update_last_login(None, token_obj.user)
+    update_last_login(None, user)
 
-    refresh = RefreshToken.for_user(token_obj.user)
-    refresh['username'] = token_obj.user.username
-    logger.info(f"TOTP ativado para o usuário {token_obj.user.username}.")
+    refresh = RefreshToken.for_user(user)
+    refresh['username'] = user.username
+    logger.info(f"TOTP ativado para o usuário {user.username}.")
     return {'access': str(refresh.access_token), 'refresh': str(refresh)}
 
 
 @transaction.atomic
-def validate_totp_login_and_get_jwt(pending_token_id: str, totp_code: str) -> dict:
-    from .selectors import _expiration_for
-
+def validate_totp_login_and_get_jwt(
+    pending_token_id: str,
+    totp_code: str,
+    *,
+    client_ip: str = "",
+    user_agent: str = "",
+) -> dict:
     try:
         token_obj = (
             ProfileChangeToken.objects
             .select_related('user__profile')
             .get(token=pending_token_id, change_type='totp_pending')
         )
-    except (ProfileChangeToken.DoesNotExist, Exception):
+    except (ProfileChangeToken.DoesNotExist, DjangoValidationError):
         raise ValueError("Token inválido.")
 
     if timezone.now() > token_obj.created_at + _expiration_for('totp_pending'):
@@ -298,13 +303,29 @@ def validate_totp_login_and_get_jwt(pending_token_id: str, totp_code: str) -> di
     secret = decrypt_value(profile.totp_secret)
 
     if not pyotp.TOTP(secret).verify(totp_code.strip(), valid_window=2):
+        _audit(
+            event="totp_login_failed",
+            result="failed",
+            user=token_obj.user,
+            email_hash=_hash_email(token_obj.user.email),
+            client_ip=client_ip,
+            user_agent=user_agent,
+        )
         raise ValueError("Código inválido ou expirado.")
 
     user = token_obj.user
     token_obj.delete()
 
-    from django.contrib.auth.models import update_last_login
     update_last_login(None, user)
+
+    _audit(
+        event="totp_login_success",
+        result="success",
+        user=user,
+        email_hash=_hash_email(user.email),
+        client_ip=client_ip,
+        user_agent=user_agent,
+    )
 
     refresh = RefreshToken.for_user(user)
     refresh['username'] = user.username
@@ -343,11 +364,9 @@ def request_password_reset(email: str, request, *, client_ip: str = "", user_age
         )
         return
 
-    # segredo criptograficamente seguro
     secret = secrets.token_urlsafe(64)
     secret_hash = _hash_secret(secret)
 
-    # invalida token de reset anterior do user
     ProfileChangeToken.objects.filter(user=user, change_type='password_reset').delete()
 
     token_id = str(uuid.uuid4())
@@ -374,9 +393,9 @@ def request_password_reset(email: str, request, *, client_ip: str = "", user_age
             ),
             recipient=user.email,
         )
-    except Exception:
+    except RuntimeError:
         logger.error(
-            f"Falha ao enviar e-mail de reset para user_id={user.id}",
+            f"Falha ao iniciar thread de e-mail de reset para user_id={user.id}",
             exc_info=True,
         )
         _audit(
@@ -448,8 +467,6 @@ def confirm_password_reset(
         )
         raise ValueError("Link inválido ou expirado.")
 
-    # expiração
-    from .selectors import _expiration_for
     if timezone.now() > token_obj.created_at + _expiration_for('password_reset'):
         _audit(
             event="password_reset_confirmed",
@@ -460,7 +477,6 @@ def confirm_password_reset(
         )
         raise ValueError("Link inválido ou expirado.")
 
-    # validators de senha
     try:
         validate_password(new_password, user=user)
     except DjangoValidationError as e:
@@ -484,7 +500,7 @@ def confirm_password_reset(
         outstanding = OutstandingToken.objects.filter(user=user)
         for ot in outstanding:
             BlacklistedToken.objects.get_or_create(token=ot)
-    except Exception:
+    except DatabaseError:
         logger.warning(
             f"Falha ao invalidar sessões ativas após reset de senha (user_id={user.id})",
             exc_info=True,

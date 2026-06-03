@@ -33,7 +33,7 @@ export default function PrivacyPolicy() {
         <p>Você tem direito a consultar, corrigir, exportar e solicitar a exclusão dos seus dados a qualquer momento. Acesse a página <strong>Meus dados</strong> após o login para exercer esses direitos.</p>
 
         <h2 style={h2}>7. Segurança</h2>
-        <p>Comunicação protegida por TLS/HTTPS. Senhas com hash Argon2. Dados sensíveis cifrados com AES-256 (Fernet). Chaves criptográficas em variáveis de ambiente, fora do código.</p>
+        <p>Comunicação protegida por TLS/HTTPS. Senhas com hash Argon2. Dados sensíveis cifrados com AES-128-CBC + HMAC-SHA256 (Fernet/cryptography). Chaves criptográficas em variáveis de ambiente, fora do código.</p>
 
         <p style={{ marginTop: '2rem' }}>
           <Link to="/register" style={{ color: '#3b82f6', fontSize: '.875rem' }}>← Voltar ao cadastro</Link>

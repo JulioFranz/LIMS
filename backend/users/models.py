@@ -8,7 +8,6 @@ class UserProfile(models.Model):
     is_verified = models.BooleanField(default=False)
     totp_enabled = models.BooleanField(default=False)
     totp_secret = models.CharField(max_length=512, blank=True, default='')
-    # LGPD 4.4 / 4.7 — Registro de consentimento
     consent_accepted_at = models.DateTimeField(null=True, blank=True)
     consent_version = models.CharField(max_length=20, blank=True, default='')
 
@@ -48,6 +47,10 @@ class AuditLog(models.Model):
         ('password_reset_requested', 'Password Reset Requested'),
         ('password_reset_confirmed', 'Password Reset Confirmed'),
         ('account_deleted', 'Account Deleted'),
+        ('login_failed', 'Login Failed'),
+        ('totp_login_success', 'TOTP Login Success'),
+        ('totp_login_failed', 'TOTP Login Failed'),
+        ('totp_setup_complete', 'TOTP Setup Complete'),
     ]
     RESULTS = [
         ('email_sent', 'Email Sent'),
@@ -59,6 +62,8 @@ class AuditLog(models.Model):
         ('invalid_secret', 'Invalid Secret'),
         ('token_expired', 'Token Expired'),
         ('weak_password', 'Weak Password'),
+        ('invalid_credentials', 'Invalid Credentials'),
+        ('failed', 'Failed'),
     ]
 
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
@@ -71,6 +76,7 @@ class AuditLog(models.Model):
     email_hash = models.CharField(max_length=32, blank=True, default='')
     ip = models.GenericIPAddressField(null=True, blank=True)
     user_agent = models.CharField(max_length=200, blank=True, default='')
+    checksum = models.CharField(max_length=64, blank=True, default='')
 
     class Meta:
         ordering = ['-created_at']

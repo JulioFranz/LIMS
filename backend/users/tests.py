@@ -324,12 +324,16 @@ class RegistroUsuarioTest(TestCase):
             "username": "novousuario",
             "email": "novo@test.com",
             "password": "SenhaForte123!",
+            "consent": True,
         })
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertTrue(User.objects.filter(username="novousuario").exists())
         user = User.objects.get(username="novousuario")
         self.assertTrue(hasattr(user, "profile"))
         self.assertFalse(user.profile.is_verified)
+        # 4.4 / 4.7 — consentimento registrado com data e versão
+        self.assertIsNotNone(user.profile.consent_accepted_at)
+        self.assertEqual(user.profile.consent_version, '1.0')
 
     def test_registro_rejeita_senha_curta(self):
         response = self.client.post(reverse("register"), {

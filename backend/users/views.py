@@ -3,12 +3,13 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.throttling import AnonRateThrottle
+from rest_framework_simplejwt.exceptions import TokenError
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .serializers import (
-    RegisterSerializer, LoginSerializer, TwoFactorSerializer,
+    RegisterSerializer, LoginSerializer,
     PasswordResetRequestSerializer, PasswordResetConfirmSerializer,
     TOTPPendingSerializer, TOTPCodeSerializer, DisableTOTPSerializer,
 )
@@ -19,10 +20,11 @@ from .services import (
     create_totp_pending_token, create_totp_setup_pending_token,
     get_totp_setup_uri, confirm_totp_setup_and_get_jwt,
     validate_totp_login_and_get_jwt, disable_totp,
+    _audit, _hash_email,
 )
 from .selectors import get_profile
-from .crypto import decrypt_value
 from .models import AuditLog
+from .crypto import decrypt_value
 import pyotp
 
 
@@ -84,6 +86,13 @@ class LoginView(APIView):
             user = None
 
         if not user:
+            _audit(
+                event="login_failed",
+                result="invalid_credentials",
+                email_hash=_hash_email(email),
+                client_ip=_client_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            )
             return Response({"detail": "Credenciais inválidas."}, status=status.HTTP_401_UNAUTHORIZED)
 
         profile = get_profile(user)
@@ -107,6 +116,8 @@ class Verify2FAView(APIView):
             tokens = validate_totp_login_and_get_jwt(
                 serializer.validated_data['pending_token'],
                 serializer.validated_data['totp_code'],
+                client_ip=_client_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
             )
             return Response(tokens)
         except ValueError as e:
@@ -172,7 +183,7 @@ class LogoutView(APIView):
             token = RefreshToken(refresh_token)
             token.blacklist()
             return Response({"detail": "Logout realizado com sucesso."}, status=status.HTTP_205_RESET_CONTENT)
-        except Exception:
+        except (TokenError, Exception):
             return Response(status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -240,7 +251,6 @@ class MeView(APIView):
         user = request.user
         profile = get_profile(user)
 
-        # Logs de auditoria associados ao usuário (apenas eventos registrados)
         audit_events = (
             AuditLog.objects
             .filter(user=user)
@@ -323,27 +333,17 @@ class MeView(APIView):
         })
 
     def delete(self, request):
-        """
-        DELETE /api/users/me/
-        Revoga o consentimento e exclui a conta do usuário (LGPD 4.6 e 4.10).
-        """
+        """Revoga o consentimento e exclui a conta do titular (LGPD Art. 8º §5º e Art. 18, VI)."""
         user = request.user
-        
-        # Opcional: registrar em log de auditoria que a conta foi excluída
-        # Mas como o usuário será excluído e user será null, o email_hash pode ser usado.
-        email_hash = getattr(user.audit_logs.first(), 'email_hash', '') if user.audit_logs.exists() else ''
-        
-        # Registra a exclusão da conta em um log genérico sem o user
-        AuditLog.objects.create(
+        _audit(
             event='account_deleted',
             result='success',
-            email_hash=email_hash,
-            ip=request.META.get('REMOTE_ADDR', ''),
-            user_agent=request.META.get('HTTP_USER_AGENT', '')
+            user=user,
+            email_hash=_hash_email(user.email),
+            client_ip=_client_ip(request),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
         )
-        
         user.delete()
-        
         return Response(
             {"detail": "Conta excluída e consentimento revogado com sucesso."},
             status=status.HTTP_204_NO_CONTENT

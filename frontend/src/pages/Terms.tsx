@@ -21,7 +21,7 @@ export default function Terms() {
         <p>Você pode consultar, exportar ou solicitar a exclusão dos seus dados a qualquer momento pela página <strong>Meus dados</strong>, acessível após o login.</p>
 
         <h2 style={h2}>5. Segurança</h2>
-        <p>Toda a comunicação é protegida por TLS/HTTPS. Senhas são armazenadas com hash Argon2. Dados sensíveis são cifrados com AES-256.</p>
+        <p>Toda a comunicação é protegida por TLS/HTTPS. Senhas são armazenadas com hash Argon2. Dados sensíveis são cifrados com AES-128-CBC + HMAC-SHA256 (Fernet).</p>
 
         <p style={{ marginTop: '2rem' }}>
           <Link to="/register" style={{ color: '#3b82f6', fontSize: '.875rem' }}>← Voltar ao cadastro</Link>
