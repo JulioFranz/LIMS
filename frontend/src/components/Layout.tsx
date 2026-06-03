@@ -25,10 +25,10 @@ export default function Layout({ children, nav }: LayoutProps) {
       <header>
         <Link to="/dashboard" className="brand">LIMS</Link>
         <nav style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          {nav}
+          {nav ?? (username ? (
             <Link
               to="/my-data"
-              title={`Meus dados`}
+              title="Meus dados"
               style={{
                 width: '34px',
                 height: '34px',
@@ -49,6 +49,7 @@ export default function Layout({ children, nav }: LayoutProps) {
             >
               {String(username)[0].toUpperCase()}
             </Link>
+          ) : null)}
         </nav>
       </header>
       <main>{children}</main>
