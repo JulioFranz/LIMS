@@ -19,7 +19,7 @@ function formatDate(ts: number) {
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const [alert, setAlert] = useState({ message: '', type: 'error' as 'error' | 'success' })
+  const [alert] = useState({ message: '', type: 'error' as 'error' | 'success' })
   const [loading, setLoading] = useState(false)
   const [payload, setPayload] = useState<Record<string, any> | null>(null)
 
@@ -48,29 +48,26 @@ export default function Dashboard() {
     navigate('/')
   }
 
-  const navUser = payload ? (payload.username || payload.user_id || 'Usuário') : ''
 
   return (
-    <Layout nav={<span style={{ color: '#c9d1e0', fontSize: '.9rem' }}>{navUser}</span>}>
-      <div className="card" style={{ maxWidth: '520px' }}>
-        <h1>Dashboard</h1>
-        <Alert message={alert.message} type={alert.type} />
-        {payload && (
-          <div style={{ margin: '1.25rem 0', padding: '1rem', background: '#f8fafc', borderRadius: '8px', fontSize: '.9rem', lineHeight: '1.8' }}>
-            <strong>Usuário:</strong> {payload.username || payload.user_id || '—'}<br />
-            <strong>Token expira em:</strong> {payload.exp ? formatDate(payload.exp) : '—'}<br />
-            <strong>Emitido em:</strong> {payload.iat ? formatDate(payload.iat) : '—'}
-          </div>
-        )}
-        <button
+    <Layout nav={<span style={{ color: '#c9d1e0', fontSize: '.9rem' }}>{}</span>}>
+
+      <button
           type="button"
           className="btn btn-danger"
           onClick={handleLogout}
           disabled={loading}
-        >
-          {loading ? 'Saindo…' : 'Sair'}
-        </button>
-      </div>
+          style={{
+            position: 'fixed',
+            bottom: '20px',
+            left: '20px',
+            zIndex: 1000,
+            width: '300px',
+            display: 'inline-block',
+          }}
+      >
+        {loading ? 'Saindo…' : 'Sair'}
+      </button>
     </Layout>
   )
 }

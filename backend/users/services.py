@@ -117,7 +117,7 @@ def _hash_secret(secret: str) -> str:
 
 
 @transaction.atomic
-def register_user(username: str, email: str, password: str) -> User | None:
+def register_user(username: str, email: str, password: str, consent: bool = False) -> User | None:
     # LGPD: não revelar se o e-mail já existe — notifica discretamente o titular
     if User.objects.filter(email__iexact=email.strip()).exists():
         _send_email(
@@ -135,7 +135,14 @@ def register_user(username: str, email: str, password: str) -> User | None:
         return None
 
     user = User.objects.create_user(username=username, email=email, password=password)
-    UserProfile.objects.create(user=user, is_verified=False)
+
+    # LGPD 4.4 / 4.7 — registra data e versão do consentimento
+    UserProfile.objects.create(
+        user=user,
+        is_verified=False,
+        consent_accepted_at=timezone.now() if consent else None,
+        consent_version='1.0' if consent else '',
+    )
 
     try:
         secret = _create_token(user, "verify")
@@ -261,7 +268,11 @@ def confirm_totp_setup_and_get_jwt(pending_token_id: str, totp_code: str) -> dic
 
     token_obj.delete()
 
+    from django.contrib.auth.models import update_last_login
+    update_last_login(None, token_obj.user)
+
     refresh = RefreshToken.for_user(token_obj.user)
+    refresh['username'] = token_obj.user.username
     logger.info(f"TOTP ativado para o usuário {token_obj.user.username}.")
     return {'access': str(refresh.access_token), 'refresh': str(refresh)}
 
@@ -292,7 +303,11 @@ def validate_totp_login_and_get_jwt(pending_token_id: str, totp_code: str) -> di
     user = token_obj.user
     token_obj.delete()
 
+    from django.contrib.auth.models import update_last_login
+    update_last_login(None, user)
+
     refresh = RefreshToken.for_user(user)
+    refresh['username'] = user.username
     logger.info(f"Login com TOTP concluído para o usuário {user.username}.")
     return {'access': str(refresh.access_token), 'refresh': str(refresh)}
 

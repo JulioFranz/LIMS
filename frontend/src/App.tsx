@@ -7,6 +7,9 @@ import Setup2FA from './pages/Setup2FA'
 import PasswordResetRequest from './pages/PasswordResetRequest'
 import PasswordResetConfirm from './pages/PasswordResetConfirm'
 import Dashboard from './pages/Dashboard'
+import MyData from './pages/MyData'
+import Terms from './pages/Terms'
+import PrivacyPolicy from './pages/PrivacyPolicy'
 
 export default function App() {
   return (
@@ -20,6 +23,9 @@ export default function App() {
         <Route path="/password-reset" element={<PasswordResetRequest />} />
         <Route path="/password-reset/confirm" element={<PasswordResetConfirm />} />
         <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/my-data" element={<MyData />} />
+        <Route path="/terms" element={<Terms />} />
+        <Route path="/privacy" element={<PrivacyPolicy />} />
       </Routes>
     </BrowserRouter>
   )
