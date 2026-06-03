@@ -2,7 +2,7 @@
 
 Sistema de autenticação com TOTP (Google Authenticator), recuperação de senha e cifragem de dados sensíveis em repouso. Projeto Integrador da disciplina de Políticas de Segurança da Informação.
 
-**Demo:** https://lims-front.vercel.app/
+**Demo:** https://lims-gules.vercel.app/
 
 > A primeira requisição pode demorar alguns minutos, o back-end hospedado no Render entra em modo de repouso por inatividade.
 
