@@ -1,0 +1,16 @@
+argon2-cffi==25.1.0
+pyotp==2.9.0
+cryptography==47.0.0
+dj-database-url==3.1.2
+Django==6.0.2
+djangorestframework==3.17.1
+djangorestframework_simplejwt==5.5.1
+gunicorn==25.3.0
+pillow==12.2.0
+psycopg2-binary==2.9.12
+python-dotenv==1.2.2
+python-magic==0.4.27
+sib-api-v3-sdk==7.6.0
+sqlparse==0.5.5
+whitenoise==6.12.0
+django-cors-headers==4.7.0
