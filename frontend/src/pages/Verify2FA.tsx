@@ -1,3 +1,17 @@
+/**
+ * LIMS — Verificação de código TOTP no login (Verify2FA.tsx)
+ *
+ * Proteções de segurança:
+ *   - Segunda etapa do login: o JWT só é emitido pelo backend após validação
+ *     bem-sucedida do código TOTP de 6 dígitos (RFC 6238).
+ *   - pending_token armazenado em sessionStorage (limpo ao fechar aba).
+ *   - pending_token removido do sessionStorage após login bem-sucedido.
+ *   - JWT (access + refresh) armazenados em sessionStorage após validação.
+ *   - inputMode="numeric": mostra teclado numérico em dispositivos móveis.
+ *   - autoComplete="one-time-code": permite preenchimento automático do código
+ *     pelo navegador (ex: SMS autofill no iOS — embora aqui use TOTP de app).
+ *   - maxLength=6: restrição visual consistente com a validação do backend.
+ */
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import api from '../api/client'
@@ -22,6 +36,7 @@ export default function Verify2FA() {
         pending_token,
         totp_code: totpCode.trim(),
       })
+      // SEGURANÇA: Limpa pending_token e armazena JWT em sessionStorage
       sessionStorage.removeItem('pending_token')
       sessionStorage.setItem('access_token', res.data.access)
       sessionStorage.setItem('refresh_token', res.data.refresh)

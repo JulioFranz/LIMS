@@ -1,3 +1,17 @@
+/**
+ * LIMS — Configuração inicial do 2FA / TOTP (Setup2FA.tsx)
+ *
+ * Proteções de segurança:
+ *   - 2FA OBRIGATÓRIO: todo usuário é redirecionado para esta página no primeiro
+ *     login. O JWT só é emitido após configurar E confirmar o 2FA.
+ *   - Segredo TOTP gerado no backend com CSPRNG e cifrado com Fernet AES no banco.
+ *   - QR Code renderizado localmente via QRCodeSVG (não envia dados para serviço externo).
+ *   - Chave manual exibida apenas sob demanda (showSecret) — minimiza exposição.
+ *   - pending_token verificado no mount: se não existir, redireciona para login
+ *     (impede acesso direto à página sem autenticação prévia).
+ *   - Confirmação exige código TOTP válido do app autenticador (validação backend).
+ *   - JWT armazenado em sessionStorage após confirmação bem-sucedida.
+ */
 import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { QRCodeSVG } from 'qrcode.react'
@@ -18,11 +32,13 @@ export default function Setup2FA() {
   const pendingToken = sessionStorage.getItem('pending_token')
 
   useEffect(() => {
+    // SEGURANÇA: Redireciona para login se não houver pending_token
     if (!pendingToken) {
       navigate('/')
       return
     }
 
+    // Solicita QR Code e segredo TOTP ao backend
     api.post('/api/users/2fa/setup/', { pending_token: pendingToken })
       .then(res => {
         setQrUri(res.data.qr_uri)
@@ -42,6 +58,7 @@ export default function Setup2FA() {
         pending_token: pendingToken,
         totp_code: totpCode.trim(),
       })
+      // SEGURANÇA: Limpa pending_token e armazena JWT em sessionStorage
       sessionStorage.removeItem('pending_token')
       sessionStorage.setItem('access_token', res.data.access)
       sessionStorage.setItem('refresh_token', res.data.refresh)
@@ -73,6 +90,7 @@ export default function Setup2FA() {
           Depois, digite o código de 6 dígitos gerado pelo app para confirmar.
         </p>
 
+        {/* SEGURANÇA: QR Code renderizado localmente (não envia dados para serviço externo) */}
         {qrUri && (
           <div style={{ display: 'flex', justifyContent: 'center', margin: '1.5rem 0' }}>
             <QRCodeSVG value={qrUri} size={200} />

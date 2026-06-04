@@ -1,3 +1,20 @@
+/**
+ * LIMS — Painel de dados pessoais do titular (MyData.tsx)
+ *
+ * Conformidade LGPD implementada nesta página:
+ *   - Art. 9º (Transparência): exibe TODOS os dados pessoais coletados com
+ *     finalidade e base legal de cada campo (recebidos do endpoint GET /me/).
+ *   - Art. 18, II (Portabilidade): botão "Exportar (.json)" permite ao titular
+ *     baixar uma cópia completa dos seus dados em formato estruturado.
+ *     O JSON é gerado localmente no navegador (não envia dados para terceiros).
+ *   - Art. 8º §5º / Art. 18, VI (Revogação e Eliminação): botão "Excluir minha
+ *     conta" com confirmação dupla (window.confirm) revoga o consentimento e
+ *     remove permanentemente a conta e dados do titular.
+ *   - Histórico de auditoria: exibe os últimos 50 eventos de segurança do
+ *     titular (logins, resets, etc.) com IP e User-Agent para rastreabilidade.
+ *   - Autenticação: requer JWT válido. Sem token, redireciona para login.
+ *   - Tokens limpos do sessionStorage após exclusão de conta.
+ */
 import { useEffect, useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import api from '../api/client'

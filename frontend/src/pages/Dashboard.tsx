@@ -1,3 +1,18 @@
+/**
+ * LIMS — Dashboard autenticado (Dashboard.tsx)
+ *
+ * Proteções de segurança no frontend:
+ *   - Verificação de token JWT no carregamento: se não houver access_token
+ *     no sessionStorage, redireciona imediatamente para o login.
+ *   - Validação do token via chamada GET /api/users/me/ ao backend: mesmo
+ *     que o token exista no sessionStorage, o backend verifica sua validade
+ *     (assinatura, expiração). Se inválido, redireciona para login.
+ *   - Token JWT armazenado em sessionStorage (não localStorage): é apagado
+ *     ao fechar a aba do navegador, reduzindo a janela de exposição.
+ *   - Logout: envia refresh token para o backend invalidar na blacklist e
+ *     limpa AMBOS os tokens (access + refresh) do sessionStorage.
+ *   - Token enviado via header Authorization: Bearer (não cookie/query string).
+ */
 import { useEffect, useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import api from '../api/client'
@@ -10,9 +25,11 @@ export default function Dashboard() {
   const [logoutLoading, setLogoutLoading] = useState(false)
 
   useEffect(() => {
+    // SEGURANÇA: Verifica presença do JWT — redireciona se não autenticado
     const access = sessionStorage.getItem('access_token')
     if (!access) { navigate('/'); return }
 
+    // SEGURANÇA: Valida JWT no backend (verifica assinatura e expiração)
     api.get('/api/users/me/', { headers: { Authorization: `Bearer ${access}` } })
       .then(res => setUsername(res.data.titular))
       .catch(() => navigate('/'))
@@ -25,11 +42,13 @@ export default function Dashboard() {
     const refresh = sessionStorage.getItem('refresh_token')
 
     try {
+      // SEGURANÇA: Envia refresh token para blacklist no backend
       await api.post('/api/users/logout/', { refresh }, {
         headers: { Authorization: `Bearer ${accessToken}` },
       })
     } catch { /* ignora erros de rede no logout */ }
 
+    // SEGURANÇA: Limpa todos os tokens do sessionStorage
     sessionStorage.removeItem('access_token')
     sessionStorage.removeItem('refresh_token')
     navigate('/')

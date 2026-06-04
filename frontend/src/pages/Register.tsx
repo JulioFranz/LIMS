@@ -1,3 +1,19 @@
+/**
+ * LIMS — Página de Cadastro (Register.tsx)
+ *
+ * Proteções de segurança e conformidade LGPD no frontend:
+ *   - Consentimento LGPD obrigatório (Art. 8º): checkbox de aceite dos Termos de
+ *     Uso e Política de Privacidade deve ser marcado antes do cadastro.
+ *     Validado TANTO no frontend (UX) quanto no backend (serializer — segurança).
+ *   - Links para Termos e Política em nova aba (target="_blank"): permite que
+ *     o titular leia antes de consentir (consentimento informado).
+ *   - autoComplete="new-password": incentiva o navegador a sugerir e salvar
+ *     uma senha forte via gerenciador de senhas.
+ *   - Validação de senha server-side: mesmo que o frontend não bloqueie, o
+ *     backend valida com 5 validadores do Django e retorna erros detalhados.
+ *   - Anti-enumeração: o backend retorna resposta idêntica se o e-mail já
+ *     existe (envia e-mail ao titular real em vez de retornar erro).
+ */
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import api from '../api/client'
@@ -15,6 +31,7 @@ export default function Register() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    // LGPD Art. 8º — Validação de consentimento no frontend (UX)
     if (!consent) {
       setAlert({ message: 'Você precisa aceitar os Termos de Uso e a Política de Privacidade para criar uma conta.', type: 'error' })
       return
@@ -54,6 +71,7 @@ export default function Register() {
             <input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" required />
           </div>
 
+          {/* LGPD Art. 8º — Consentimento explícito com links para Termos e Política */}
           <div style={{
             display: 'flex', alignItems: 'flex-start', gap: '0.6rem',
             margin: '1rem 0 1.25rem', fontSize: '.875rem', color: '#374151',

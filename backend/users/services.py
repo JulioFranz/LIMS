@@ -1,3 +1,22 @@
+"""
+LIMS — Camada de serviços / regras de negócio (services.py)
+
+Este módulo concentra toda a lógica de segurança do sistema, isolada das Views
+(padrão Clean Architecture / Hexagonal Architecture — Services Layer).
+
+Proteções implementadas neste arquivo:
+  - Hashing SHA-256 de segredos de token (nunca armazenados em texto plano)
+  - Checksum HMAC-SHA256 na trilha de auditoria (anti-tampering / Non-Repudiation)
+  - Pseudonimização de e-mails nos logs via SHA-256 truncado (LGPD Art. 13, §4º)
+  - Proteção contra enumeração de e-mails no cadastro (resposta idêntica)
+  - Verificação de e-mail via token de uso único com expiração
+  - MFA/2FA completo: setup TOTP, verificação com valid_window, cifra do segredo
+  - Reset de senha com token UUID + segredo hasheado + expiração + uso único
+  - Invalidação de TODAS as sessões JWT após reset de senha (token blacklist)
+  - Registro de consentimento LGPD (Privacy by Design) no cadastro
+  - Transações atômicas em operações críticas (@transaction.atomic)
+"""
+
 import hashlib
 import hmac
 import os
@@ -26,10 +45,23 @@ logger = logging.getLogger(__name__)
 audit_logger = logging.getLogger("users.audit")
 
 
-# ---------- Helpers ----------
+# =============================================================================
+# Helpers de segurança
+# =============================================================================
 
-# Cria token de mudanca no banco
 def _create_token(user: User, change_type: str, new_value: str = "") -> str:
+    """
+    Cria um token de operação sensível (verificação de e-mail, etc.).
+
+    Proteções:
+      - UUID v4 aleatório como identificador público (não previsível).
+      - Segredo numérico de 6 dígitos gerado com secrets.randbelow (CSPRNG).
+      - O segredo é hasheado com SHA-256 antes de salvar no banco — o texto
+        plano só é retornado ao usuário (via e-mail) e nunca fica persistido.
+      - new_value é cifrado com Fernet AES (encrypt_value) quando contém
+        dados sensíveis.
+      - Tokens anteriores do mesmo tipo são deletados (impede acúmulo).
+    """
     token_id = str(uuid.uuid4())
     secret = f"{secrets.randbelow(1_000_000):06d}"
     secret_hash = _hash_secret(secret)
@@ -46,12 +78,15 @@ def _create_token(user: User, change_type: str, new_value: str = "") -> str:
 
 
 def get_token_new_value(token_obj) -> str:
-    """Decifra new_value, usar sempre que precisar ler o campo em outros módulos."""
+    """Decifra new_value usando Fernet AES (crypto.py). Usar sempre que precisar ler o campo."""
     return decrypt_value(token_obj.new_value)
 
 
-# Disparo de email via Brevo
 def _send_email(subject: str, message: str, recipient: str) -> None:
+    """
+    Disparo de e-mail transacional via Brevo (Sendinblue) em thread separada.
+    A API key é carregada de variável de ambiente (Secrets Management).
+    """
     def send_task():
         configuration = sib_api_v3_sdk.Configuration()
         configuration.api_key['api-key'] = os.environ.get('BREVO_API_KEY')
@@ -75,20 +110,45 @@ def _send_email(subject: str, message: str, recipient: str) -> None:
 
 
 def _hash_email(email: str) -> str:
-    """Hash de e-mail para logs (LGPD: não logar dado pessoal em claro)."""
+    """
+    Pseudonimização de e-mail para logs (LGPD Art. 13, §4º).
+
+    Proteção: o e-mail nunca é registrado em texto plano nos logs de auditoria.
+    Em vez disso, é armazenado como hash SHA-256 truncado para 16 caracteres.
+    Isso permite correlacionar eventos do mesmo titular (mesmo hash = mesmo e-mail)
+    sem expor o dado pessoal. Atende ao princípio de minimização (LGPD Art. 6º, III).
+    """
     return hashlib.sha256(email.strip().lower().encode()).hexdigest()[:16]
 
 
-# Checksum HMAC-SHA256 dos campos de log, detecta alteracoes diretas do banco
 def _compute_audit_checksum(event: str, result: str, user_id: str, email_hash: str, ip: str, user_agent: str) -> str:
-    """HMAC-SHA256 dos campos do evento."""
+    """
+    Gera checksum HMAC-SHA256 para o registro de auditoria (Anti-Tampering).
+
+    Proteção: Non-Repudiation e integridade da trilha de auditoria (ISO 27001 A.12.4).
+    O checksum é calculado com HMAC usando a SECRET_KEY do Django sobre todos os
+    campos do evento concatenados. Se qualquer campo for alterado diretamente no
+    banco de dados (ex: atacante com acesso ao DB tentando apagar rastros), o
+    checksum armazenado não corresponderá ao recalculado, denunciando a adulteração.
+    Método verify_checksum() pode ser implementado para validar integridade em auditoria.
+    """
     payload = f"{event}|{result}|{user_id}|{email_hash}|{ip}|{user_agent}"
     return hmac.new(settings.SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
 
-# Registro de log estruturdo
 def _audit(event: str, result: str, *, user=None, email_hash: str = "",
            client_ip: str = "", user_agent: str = "") -> None:
+    """
+    Registra evento na trilha de auditoria (banco de dados + arquivo de log).
+
+    Proteções:
+      - Checksum HMAC-SHA256 anti-tampering em cada registro.
+      - User-Agent truncado a 200 chars (prevenção de payload injection nos logs).
+      - Dupla persistência: banco de dados (AuditLog) + arquivo rotativo (audit.log).
+      - Falha na gravação do AuditLog não interrompe o fluxo principal do sistema
+        (disponibilidade > log), mas é registrada no logger de exceções.
+      - Formato estruturado no arquivo permite parsing automatizado por SIEM.
+    """
     user_id_str = str(user.id) if user else ""
     ua_truncated = user_agent[:200]
     checksum = _compute_audit_checksum(event, result, user_id_str, email_hash, client_ip or "", ua_truncated)
@@ -104,7 +164,6 @@ def _audit(event: str, result: str, *, user=None, email_hash: str = "",
             checksum=checksum,
         )
     except DatabaseError:
-        # Log de auditoria não pode travar o fluxo principal
         logger.exception("Falha ao gravar AuditLog")
 
     audit_logger.info(
@@ -121,14 +180,37 @@ def _audit(event: str, result: str, *, user=None, email_hash: str = "",
 
 
 def _hash_secret(secret: str) -> str:
-    """SHA-256 hex do segredo do token (Requisito 2.2 — armazenamento seguro)."""
+    """
+    Hash SHA-256 do segredo de um token.
+
+    Proteção: o segredo real (enviado por e-mail ao usuário) nunca é armazenado
+    em texto plano no banco de dados. Apenas o hash é persistido.
+    Na verificação, o hash do segredo fornecido é comparado ao armazenado.
+    Mesmo padrão usado para senhas (store hash, never store plaintext).
+    """
     return hashlib.sha256(secret.encode()).hexdigest()
 
 
+# =============================================================================
+# Cadastro de usuário
+# =============================================================================
+
 @transaction.atomic
 def register_user(username: str, email: str, password: str, consent: bool = False) -> User | None:
-    # nao revelar se o e-mail ja existe
+    """
+    Registra um novo usuário no sistema.
+
+    Proteções:
+      - Anti-enumeração de e-mail: se o e-mail já existe, NÃO retorna erro.
+        Em vez disso, envia um e-mail ao titular informando a tentativa.
+        Isso impede que atacantes descubram quais e-mails estão cadastrados.
+      - Consentimento LGPD (Art. 8º): registra timestamp e versão do aceite.
+      - Token de verificação de e-mail com segredo hasheado (SHA-256).
+      - Transação atômica: se qualquer etapa falhar, tudo é revertido.
+    """
     if User.objects.filter(email__iexact=email.strip()).exists():
+        # SEGURANÇA: Anti-enumeração — resposta idêntica ao cadastro bem-sucedido.
+        # Envia e-mail ao titular real para que ele saiba da tentativa.
         _send_email(
             "Tentativa de cadastro - LIMS",
             (
@@ -145,6 +227,7 @@ def register_user(username: str, email: str, password: str, consent: bool = Fals
 
     user = User.objects.create_user(username=username, email=email, password=password)
 
+    # LGPD: Privacy by Design — registra consentimento com timestamp e versão (Art. 8º)
     UserProfile.objects.create(
         user=user,
         is_verified=False,
@@ -165,8 +248,20 @@ def register_user(username: str, email: str, password: str, consent: bool = Fals
     return user
 
 
-# Verificacao de email via hash do segredo enviado
+# =============================================================================
+# Verificação de e-mail
+# =============================================================================
+
 def confirm_email_verification(token_str: str) -> None:
+    """
+    Confirma a verificação de e-mail usando o segredo enviado por e-mail.
+
+    Proteções:
+      - Comparação por hash: o segredo fornecido é hasheado (SHA-256) e comparado
+        ao token_hash armazenado no banco. O segredo real nunca é persistido.
+      - Expiração: tokens expirados são deletados e rejeitados.
+      - Uso único: o token é deletado após uso bem-sucedido.
+    """
     secret_hash = _hash_secret(token_str)
 
     token_obj = (
@@ -188,9 +283,17 @@ def confirm_email_verification(token_str: str) -> None:
     token_obj.delete()
 
 
-# ---------- TOTP (Google Authenticator) ----------
+# =============================================================================
+# TOTP / 2FA — Autenticação de Dois Fatores (RFC 6238)
+# =============================================================================
 
 def _create_pending_token(user: User, change_type: str) -> str:
+    """
+    Cria token pendente para fluxo de 2FA (login ou setup).
+
+    Proteção: token UUID aleatório como identificador de sessão temporária.
+    Impede que o JWT seja emitido antes da verificação do segundo fator.
+    """
     token_id = uuid.uuid4()
     ProfileChangeToken.objects.filter(user=user, change_type=change_type).delete()
     ProfileChangeToken.objects.create(
@@ -204,15 +307,25 @@ def _create_pending_token(user: User, change_type: str) -> str:
 
 
 def create_totp_pending_token(user: User) -> str:
+    """Cria token pendente para login com 2FA (usuário já tem TOTP configurado)."""
     return _create_pending_token(user, 'totp_pending')
 
 
 def create_totp_setup_pending_token(user: User) -> str:
+    """Cria token pendente para configuração inicial do 2FA (primeiro login)."""
     return _create_pending_token(user, 'totp_setup_pending')
 
 
-# QR Code e segredo para TOTP
 def get_totp_setup_uri(pending_token_id: str) -> dict:
+    """
+    Gera o segredo TOTP e a URI para QR Code do Google Authenticator.
+
+    Proteções:
+      - Segredo TOTP gerado com pyotp.random_base32() (CSPRNG de 160 bits).
+      - Segredo cifrado com Fernet AES antes de salvar no banco (encrypt_value).
+      - Token pendente com expiração (impede setup tardio com token velho).
+      - URI de provisionamento padrão otpauth:// (compatível com Google Auth, Authy, etc.).
+    """
     try:
         token_obj = (
             ProfileChangeToken.objects
@@ -232,15 +345,25 @@ def get_totp_setup_uri(pending_token_id: str) -> dict:
         issuer_name="LIMS"
     )
 
+    # SEGURANÇA: Segredo TOTP cifrado com Fernet AES antes do armazenamento
     token_obj.new_value = encrypt_value(secret)
     token_obj.save(update_fields=['new_value'])
 
     return {'qr_uri': qr_uri, 'secret': secret}
 
 
-# Confirma o TOTP com codigo do app e emite JWT
 @transaction.atomic
 def confirm_totp_setup_and_get_jwt(pending_token_id: str, totp_code: str) -> dict:
+    """
+    Confirma a configuração do 2FA validando o código TOTP e emite JWT.
+
+    Proteções:
+      - Validação do código TOTP com valid_window=2 (aceita código atual ± 2 janelas
+        de 30s, tolerando dessincronização de relógio do dispositivo do usuário).
+      - Segredo TOTP decifrado da sessão pendente e re-cifrado no perfil do usuário.
+      - Token pendente deletado após uso (uso único).
+      - Transação atômica: garante consistência entre ativar 2FA e deletar token.
+    """
     try:
         token_obj = (
             ProfileChangeToken.objects
@@ -257,11 +380,14 @@ def confirm_totp_setup_and_get_jwt(pending_token_id: str, totp_code: str) -> dic
     if not token_obj.new_value:
         raise ValueError("Inicie a configuração antes de confirmar.")
 
+    # SEGURANÇA: Decifra o segredo TOTP da sessão pendente (Fernet AES)
     secret = decrypt_value(token_obj.new_value)
 
+    # SEGURANÇA: Valida código TOTP com tolerância de ±2 janelas de 30s
     if not pyotp.TOTP(secret).verify(totp_code.strip(), valid_window=2):
         raise ValueError("Código inválido. Verifique o app e tente novamente.")
 
+    # SEGURANÇA: Armazena segredo TOTP cifrado (Fernet AES) no perfil permanente
     profile = token_obj.user.profile
     profile.totp_secret = encrypt_value(secret)
     profile.totp_enabled = True
@@ -286,6 +412,17 @@ def validate_totp_login_and_get_jwt(
     client_ip: str = "",
     user_agent: str = "",
 ) -> dict:
+    """
+    Valida o código TOTP no fluxo de login e emite JWT se correto.
+
+    Proteções:
+      - Segredo TOTP decifrado do perfil (Fernet AES) apenas no momento da validação.
+      - Falha na validação é registrada na trilha de auditoria (login_failed + IP + UA).
+      - Sucesso também é registrado (totp_login_success) para rastreabilidade.
+      - Token pendente deletado após uso (impede replay).
+      - valid_window=2: tolerância de ±2 janelas de 30s para dessincronização de relógio.
+      - Transação atômica para consistência.
+    """
     try:
         token_obj = (
             ProfileChangeToken.objects
@@ -300,9 +437,11 @@ def validate_totp_login_and_get_jwt(
         raise ValueError("Sessão expirada. Faça login novamente.")
 
     profile = token_obj.user.profile
+    # SEGURANÇA: Decifra segredo TOTP do perfil (Fernet AES) para validação
     secret = decrypt_value(profile.totp_secret)
 
     if not pyotp.TOTP(secret).verify(totp_code.strip(), valid_window=2):
+        # SEGURANÇA: Registra tentativa de login 2FA falha na trilha de auditoria
         _audit(
             event="totp_login_failed",
             result="failed",
@@ -318,6 +457,7 @@ def validate_totp_login_and_get_jwt(
 
     update_last_login(None, user)
 
+    # SEGURANÇA: Registra login 2FA bem-sucedido na trilha de auditoria
     _audit(
         event="totp_login_success",
         result="success",
@@ -334,6 +474,10 @@ def validate_totp_login_and_get_jwt(
 
 
 def disable_totp(user: User) -> None:
+    """
+    Desativa o 2FA do usuário.
+    O segredo TOTP é apagado do banco (não apenas desabilitado).
+    """
     profile = user.profile
     profile.totp_secret = ''
     profile.totp_enabled = False
@@ -341,20 +485,37 @@ def disable_totp(user: User) -> None:
     logger.info(f"TOTP desativado para o usuário {user.username}.")
 
 
-# ---------- Recuperação de senha ----------
+# =============================================================================
+# Recuperação de senha
+# =============================================================================
 
 def _build_reset_url(request, token_id: str, secret: str) -> str:
+    """Constrói a URL de reset apontando para o frontend (não para o backend)."""
     frontend_url = settings.FRONTEND_URL.rstrip('/')
     return f"{frontend_url}/password-reset/confirm?uid={token_id}&token={secret}"
 
 
 @transaction.atomic
 def request_password_reset(email: str, request, *, client_ip: str = "", user_agent: str = "") -> None:
+    """
+    Solicita recuperação de senha.
+
+    Proteções:
+      - Anti-enumeração de e-mail: se o e-mail não existe, retorna silenciosamente
+        (sem erro). A view retorna sempre a mesma mensagem genérica, impedindo
+        que atacantes descubram quais e-mails estão cadastrados.
+      - Segredo de 64 bytes (token_urlsafe) — entropia criptográfica alta.
+      - Segredo hasheado com SHA-256 antes de salvar (nunca em texto plano).
+      - Tokens anteriores do mesmo tipo são deletados (apenas 1 ativo por vez).
+      - Todas as etapas registradas na trilha de auditoria (com IP e User-Agent).
+      - Transação atômica para consistência.
+    """
     email_hash = _hash_email(email)
 
     try:
         user = User.objects.get(email__iexact=email.strip())
     except User.DoesNotExist:
+        # SEGURANÇA: Anti-enumeração — não revela se o e-mail existe ou não
         _audit(
             event="password_reset_requested",
             result="no_user",
@@ -364,7 +525,9 @@ def request_password_reset(email: str, request, *, client_ip: str = "", user_age
         )
         return
 
+    # SEGURANÇA: Segredo de alta entropia (64 bytes / 512 bits via CSPRNG)
     secret = secrets.token_urlsafe(64)
+    # SEGURANÇA: Apenas o hash SHA-256 do segredo é armazenado no banco
     secret_hash = _hash_secret(secret)
 
     ProfileChangeToken.objects.filter(user=user, change_type='password_reset').delete()
@@ -427,9 +590,30 @@ def confirm_password_reset(
         client_ip: str = "",
         user_agent: str = "",
 ) -> None:
+    """
+    Confirma o reset de senha com o token da URL e define nova senha.
+
+    Proteções:
+      - select_for_update(): lock pessimista no token (impede race condition
+        com duas requisições simultâneas usando o mesmo link).
+      - Verificação de token usado (used_at) — impede reutilização do link.
+      - Comparação do hash do segredo (token_hash vs SHA-256 do segredo da URL).
+      - Expiração: token válido por 30 minutos (configurável em selectors.py).
+      - Validação da nova senha com os 5 validadores do Django (incluindo
+        complexidade customizada).
+      - Mensagem de erro genérica ("Link inválido ou expirado") em TODAS as
+        falhas — impede que atacantes distingam entre token inexistente, usado,
+        expirado ou com segredo errado (anti-enumeração).
+      - Invalidação de TODAS as sessões JWT ativas do usuário via blacklist
+        após mudança de senha (impede que sessões antigas continuem válidas).
+      - Cada etapa é registrada na trilha de auditoria.
+      - Transação atômica para consistência.
+    """
+    # SEGURANÇA: Hash do segredo da URL para comparar com o armazenado
     secret_hash = _hash_secret(secret)
 
     try:
+        # SEGURANÇA: select_for_update() previne race condition (uso paralelo do mesmo token)
         token_obj = (
             ProfileChangeToken.objects
             .select_for_update()
@@ -447,6 +631,7 @@ def confirm_password_reset(
 
     user = token_obj.user
 
+    # SEGURANÇA: Token já foi usado — impede reutilização (replay attack)
     if token_obj.used_at is not None:
         _audit(
             event="password_reset_confirmed",
@@ -457,6 +642,7 @@ def confirm_password_reset(
         )
         raise ValueError("Link inválido ou expirado.")
 
+    # SEGURANÇA: Comparação do hash do segredo (nunca compara texto plano)
     if token_obj.token_hash != secret_hash:
         _audit(
             event="password_reset_confirmed",
@@ -467,6 +653,7 @@ def confirm_password_reset(
         )
         raise ValueError("Link inválido ou expirado.")
 
+    # SEGURANÇA: Verificação de expiração (30 min, configurável em selectors.py)
     if timezone.now() > token_obj.created_at + _expiration_for('password_reset'):
         _audit(
             event="password_reset_confirmed",
@@ -477,6 +664,7 @@ def confirm_password_reset(
         )
         raise ValueError("Link inválido ou expirado.")
 
+    # SEGURANÇA: Validação da nova senha com os 5 validadores do Django
     try:
         validate_password(new_password, user=user)
     except DjangoValidationError as e:
@@ -492,9 +680,13 @@ def confirm_password_reset(
     user.set_password(new_password)
     user.save(update_fields=['password'])
 
+    # SEGURANÇA: Marca token como usado — impede reutilização
     token_obj.used_at = timezone.now()
     token_obj.save(update_fields=['used_at'])
 
+    # SEGURANÇA: Invalida TODAS as sessões JWT ativas após mudança de senha.
+    # Todos os refresh tokens são adicionados à blacklist, forçando re-login.
+    # Impede que um atacante que roubou um token continue com acesso após o reset.
     try:
         from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
         outstanding = OutstandingToken.objects.filter(user=user)

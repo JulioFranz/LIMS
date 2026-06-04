@@ -1,3 +1,15 @@
+/**
+ * LIMS — Solicitação de recuperação de senha (PasswordResetRequest.tsx)
+ *
+ * Proteções de segurança:
+ *   - Anti-enumeração de e-mail: o backend retorna SEMPRE a mesma mensagem
+ *     genérica, independente de o e-mail existir ou não. Isso impede que
+ *     atacantes descubram quais e-mails estão cadastrados no sistema.
+ *   - Rate Limiting: endpoint limitado a 5 req/hora (PasswordResetThrottle).
+ *     O frontend trata HTTP 429 com mensagem amigável.
+ *   - O link de reset é enviado por e-mail, nunca exibido no frontend.
+ *   - O token de reset expira em 30 minutos (configurável no backend).
+ */
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import api from '../api/client'
@@ -18,6 +30,7 @@ export default function PasswordResetRequest() {
       setMessage(res.data?.detail || 'Solicitação recebida.')
       setEmail('')
     } catch (err: any) {
+      // SEGURANÇA: Tratamento de Rate Limit (HTTP 429)
       if (err.response?.status === 429) {
         setMessage('Muitas solicitações. Tente novamente mais tarde.')
       } else {

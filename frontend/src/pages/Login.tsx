@@ -1,3 +1,21 @@
+/**
+ * LIMS — Página de Login (Login.tsx)
+ *
+ * Proteções de segurança no frontend:
+ *   - Login em DUAS ETAPAS obrigatório: esta página NUNCA recebe JWT diretamente.
+ *     O backend retorna apenas um pending_token que redireciona para:
+ *       • /verify-2fa (se 2FA já configurado) — exige código TOTP.
+ *       • /setup-2fa (se 2FA não configurado) — força configuração do 2FA.
+ *     O JWT só é emitido após verificação do segundo fator.
+ *   - pending_token armazenado em sessionStorage (não localStorage):
+ *     sessionStorage é apagado ao fechar a aba, reduzindo janela de exposição.
+ *   - Tratamento de HTTP 429 (Rate Limit): exibe mensagem amigável ao usuário
+ *     quando o rate limiting do backend (3 req/min) é ativado.
+ *   - Mensagem de erro genérica "Credenciais inválidas" — não revela se o e-mail
+ *     existe ou se é a senha que está errada (anti-enumeração).
+ *   - autoComplete="email" e "current-password": permite uso de gerenciadores
+ *     de senha do navegador (incentiva senhas fortes e únicas).
+ */
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import api from '../api/client'
@@ -20,18 +38,21 @@ export default function Login() {
       const res = await api.post('/api/users/login/', { email, password })
       const data = res.data
 
+      // SEGURANÇA: 2FA obrigatório — redireciona para verificação TOTP
       if (data.totp_required) {
         sessionStorage.setItem('pending_token', data.pending_token)
         navigate('/verify-2fa')
         return
       }
 
+      // SEGURANÇA: Força setup do 2FA para usuários que ainda não configuraram
       if (data.setup_required) {
         sessionStorage.setItem('pending_token', data.pending_token)
         navigate('/setup-2fa')
         return
       }
     } catch (err: any) {
+      // SEGURANÇA: Tratamento de Rate Limit (HTTP 429) — feedback amigável
       if (err.response?.status === 429) {
         setAlert({ message: 'Muitas tentativas. Aguarde um momento e tente novamente.', type: 'error' })
       } else {
